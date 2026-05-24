@@ -51,7 +51,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({args, ghToken: process.env.GH_TOKEN || ""}) + "\\n");
 if (args[0] === "repo" && args[1] === "list") {
   process.stdout.write(JSON.stringify([
-    {nameWithOwner:"openclaw/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
+    {nameWithOwner:"arcforgelabs/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
   ]));
   process.exit(0);
 }
@@ -72,7 +72,7 @@ process.exit(2);
       "--cursor-path",
       cursorPath,
       "--repo",
-      "openclaw/clawsweeper",
+      "arcforgelabs/clawsweeper",
     ],
     {
       cwd: process.cwd(),
@@ -83,7 +83,7 @@ process.exit(2);
         GH_BIN: ghPath,
         GH_TOKEN: "workflow-token",
         CLAWSWEEPER_DISPATCH_TOKEN: "dispatch-token",
-        CLAWSWEEPER_INVENTORY_TOKEN_OPENCLAW: "inventory-openclaw",
+        CLAWSWEEPER_INVENTORY_TOKEN_ARCFORGELABS: "inventory-arcforgelabs",
         CLAWSWEEPER_INVENTORY_TOKEN_STEIPETE: "",
       },
     },
@@ -91,14 +91,14 @@ process.exit(2);
 
   const summary = JSON.parse(output) as { dispatched: string[]; total: number };
   assert.equal(summary.total, 1);
-  assert.deepEqual(summary.dispatched, ["openclaw/b"]);
+  assert.deepEqual(summary.dispatched, ["arcforgelabs/b"]);
   const calls = readFileSync(logPath, "utf8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { args: string[]; ghToken: string });
   assert.deepEqual(
     calls.filter((call) => call.args[0] === "repo").map((call) => call.ghToken),
-    ["inventory-openclaw"],
+    ["inventory-arcforgelabs"],
   );
 });
 
@@ -115,8 +115,8 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({args, ghToken: process.env.GH_TOKEN || ""}) + "\\n");
 if (args[0] === "repo" && args[1] === "list") {
   const owner = args[2];
-  const data = owner === "openclaw"
-    ? [{nameWithOwner:"openclaw/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}]
+  const data = owner === "arcforgelabs"
+    ? [{nameWithOwner:"arcforgelabs/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}]
     : [{nameWithOwner:"steipete/A",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}];
   process.stdout.write(JSON.stringify(data));
   process.exit(0);
@@ -138,7 +138,7 @@ process.exit(2);
       "--cursor-path",
       cursorPath,
       "--repo",
-      "openclaw/clawsweeper",
+      "arcforgelabs/clawsweeper",
     ],
     {
       cwd: process.cwd(),
@@ -148,22 +148,22 @@ process.exit(2);
         GITHUB_ACTIONS: "true",
         GH_BIN: ghPath,
         CLAWSWEEPER_DISPATCH_TOKEN: "dispatch-token",
-        CLAWSWEEPER_INVENTORY_TOKEN_OPENCLAW: "inventory-openclaw",
+        CLAWSWEEPER_INVENTORY_TOKEN_ARCFORGELABS: "inventory-arcforgelabs",
         CLAWSWEEPER_INVENTORY_TOKEN_STEIPETE: "__public__",
       },
     },
   );
 
   const summary = JSON.parse(output) as { dispatched: string[]; total: number };
-  assert.equal(summary.total, 2);
-  assert.deepEqual(summary.dispatched, ["openclaw/b", "steipete/a"]);
+  assert.equal(summary.total, 1);
+  assert.deepEqual(summary.dispatched, ["arcforgelabs/b"]);
   const calls = readFileSync(logPath, "utf8")
     .trim()
     .split("\n")
     .map((line) => JSON.parse(line) as { args: string[]; ghToken: string });
   assert.deepEqual(
     calls.filter((call) => call.args[0] === "repo").map((call) => call.ghToken),
-    ["inventory-openclaw", "dispatch-token"],
+    ["inventory-arcforgelabs"],
   );
 });
 
@@ -194,10 +194,10 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify({args, ghToken: process.env.GH_TOKEN || ""}) + "\\n");
 if (args[0] === "repo" && args[1] === "list") {
   const owner = args[2];
-  const data = owner === "openclaw"
+  const data = owner === "arcforgelabs"
     ? [
-        {nameWithOwner:"openclaw/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}},
-        {nameWithOwner:"openclaw/clawsweeper-state",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
+        {nameWithOwner:"arcforgelabs/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}},
+        {nameWithOwner:"arcforgelabs/clawsweeper-state",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
       ]
     : [
         {nameWithOwner:"steipete/A",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"master"}}
@@ -222,7 +222,7 @@ process.exit(2);
       "--cursor-path",
       cursorPath,
       "--repo",
-      "openclaw/clawsweeper",
+      "arcforgelabs/clawsweeper",
     ],
     {
       cwd: process.cwd(),
@@ -232,14 +232,14 @@ process.exit(2);
         GH_BIN: ghPath,
         GH_TOKEN: "workflow-token",
         CLAWSWEEPER_DISPATCH_TOKEN: "dispatch-token",
-        CLAWSWEEPER_INVENTORY_TOKEN_OPENCLAW: "inventory-openclaw",
+        CLAWSWEEPER_INVENTORY_TOKEN_ARCFORGELABS: "inventory-arcforgelabs",
         CLAWSWEEPER_INVENTORY_TOKEN_STEIPETE: "inventory-steipete",
       },
     },
   );
 
   const summary = JSON.parse(output) as { dispatched: string[]; next_cursor: number };
-  assert.deepEqual(summary.dispatched, ["openclaw/b", "steipete/a"]);
+  assert.deepEqual(summary.dispatched, ["arcforgelabs/b"]);
   assert.equal(summary.next_cursor, 0);
   assert.match(readFileSync(cursorPath, "utf8"), /"next_cursor": 0/);
 
@@ -249,17 +249,16 @@ process.exit(2);
     .map((line) => JSON.parse(line) as { args: string[]; ghToken: string });
   assert.deepEqual(
     calls.filter((call) => call.args[0] === "repo").map((call) => call.ghToken),
-    ["inventory-openclaw", "inventory-steipete"],
+    ["inventory-arcforgelabs"],
   );
   assert.deepEqual(
     calls.filter((call) => call.args[0] === "api").map((call) => call.ghToken),
-    ["dispatch-token", "dispatch-token"],
+    ["dispatch-token"],
   );
   assert.deepEqual(
     calls.filter((call) => call.args[0] === "api").map((call) => call.args.join(" ")),
     [
-      "api repos/openclaw/clawsweeper/dispatches -f event_type=clawsweeper_target_sweep -f client_payload[target_repo]=openclaw/b -f client_payload[target_branch]=main -f client_payload[hot_intake]=true -f client_payload[batch_size]=1 -f client_payload[shard_count]=1",
-      "api repos/openclaw/clawsweeper/dispatches -f event_type=clawsweeper_target_sweep -f client_payload[target_repo]=steipete/a -f client_payload[target_branch]=master -f client_payload[hot_intake]=true -f client_payload[batch_size]=1 -f client_payload[shard_count]=1",
+      "api repos/arcforgelabs/clawsweeper/dispatches -f event_type=clawsweeper_target_sweep -f client_payload[target_repo]=arcforgelabs/b -f client_payload[target_branch]=main -f client_payload[hot_intake]=true -f client_payload[batch_size]=1 -f client_payload[shard_count]=1",
     ],
   );
 });
@@ -278,8 +277,8 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(args) + "\\n");
 if (args[0] === "repo" && args[1] === "list") {
   process.stdout.write(JSON.stringify([
-    {nameWithOwner:"openclaw/A",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}},
-    {nameWithOwner:"openclaw/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
+    {nameWithOwner:"arcforgelabs/A",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}},
+    {nameWithOwner:"arcforgelabs/B",isArchived:false,isDisabled:false,isFork:false,hasIssuesEnabled:true,visibility:"PUBLIC",defaultBranchRef:{name:"main"}}
   ]));
   process.exit(0);
 }
@@ -301,7 +300,7 @@ process.exit(2);
       cursorPath,
       "--dry-run",
       "--owners",
-      "openclaw",
+      "arcforgelabs",
     ],
     {
       cwd: process.cwd(),
@@ -309,7 +308,7 @@ process.exit(2);
       env: {
         ...process.env,
         GH_BIN: ghPath,
-        CLAWSWEEPER_INVENTORY_TOKEN_OPENCLAW: "inventory-openclaw",
+        CLAWSWEEPER_INVENTORY_TOKEN_ARCFORGELABS: "inventory-arcforgelabs",
       },
     },
   );
@@ -318,7 +317,7 @@ process.exit(2);
     dispatched: string[];
     cursor_written: boolean;
   };
-  assert.deepEqual(summary.dispatched, ["openclaw/b"]);
+  assert.deepEqual(summary.dispatched, ["arcforgelabs/b"]);
   assert.equal(summary.cursor_written, false);
   assert.match(readFileSync(cursorPath, "utf8"), /"next_cursor": 1/);
   const calls = readFileSync(logPath, "utf8")

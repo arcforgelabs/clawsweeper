@@ -40,7 +40,12 @@ const CLAWSWEEPER_PULL_ITEM_ACTIONS = new Set([
   "labeled",
   "unlabeled",
 ]);
-const CLAWSWEEPER_WEBHOOK_DENY_REPOS = new Set(["openclaw/clawsweeper-state", "openclaw/.github"]);
+const CLAWSWEEPER_WEBHOOK_DENY_REPOS = new Set([
+  "openclaw/clawsweeper-state",
+  "openclaw/.github",
+  "arcforgelabs/clawsweeper-state",
+  "arcforgelabs/.github",
+]);
 const CLAWSWEEPER_AUTHOR_READ_ONLY_COMMAND =
   "(?:review|re-review|rerun|re-run|rerun[ -]?review|re-run[ -]?review|status|explain|hatch|hatch egg|pr egg hatch|hatch pr egg)";
 const OPTIONAL_SECTION_TIMEOUT_MS = 6000;
@@ -606,7 +611,7 @@ function isEligibleGithubWebhookRepository(repo) {
   if (repo.has_issues === false) return false;
   if (CLAWSWEEPER_WEBHOOK_DENY_REPOS.has(targetRepo)) return false;
   const [owner] = targetRepo.split("/");
-  return owner === "openclaw" || owner === "steipete";
+  return owner === "openclaw" || owner === "steipete" || owner === "arcforgelabs";
 }
 
 function isOpenClawRepo(repo) {
