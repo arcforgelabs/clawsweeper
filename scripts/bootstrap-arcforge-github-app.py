@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -84,17 +85,36 @@ def main() -> int:
     manifest_b64 = base64.urlsafe_b64encode(json.dumps(MANIFEST).encode()).decode().rstrip("=")
     manifest_url = f"https://github.com/organizations/{ORG}/settings/apps/new?manifest={manifest_b64}"
 
-    server = HTTPServer(("127.0.0.1", PORT), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    server = None
+    try:
+        server = HTTPServer(("127.0.0.1", PORT), Handler)
+    except OSError as exc:
+        if exc.errno != 98:
+            raise
+        print(
+            f"Port {PORT} is already in use; assuming an existing bootstrap redirect server is running.",
+            file=sys.stderr,
+        )
 
-    print(f"Opening GitHub app manifest URL in your browser:\n{manifest_url}")
+    if server is not None:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+    else:
+        thread = None
+
+    print(f"Open this GitHub app manifest URL and complete org sudo confirmation:\n{manifest_url}")
     webbrowser.open(manifest_url)
     print(f"Waiting for redirect to {REDIRECT_URL} ...")
 
-    thread.join(timeout=300)
+    if thread is not None:
+        thread.join(timeout=600)
+    else:
+        deadline = time.time() + 600
+        while time.time() < deadline and not Handler.code:
+            time.sleep(1)
     if not Handler.code:
         print("Timed out waiting for GitHub app manifest redirect.", file=sys.stderr)
+        print("Complete GitHub sudo mode in your browser, then rerun this script.", file=sys.stderr)
         return 1
 
     conversion = gh_json(["-X", "POST", f"/app-manifests/{Handler.code}/conversions"])
