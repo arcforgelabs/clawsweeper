@@ -13,6 +13,27 @@ This document is the operator runbook for bootstrap, conservative mode, and roll
 
 Upstream reference: [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper).
 
+## State repository (Arc Forge only)
+
+`arcforgelabs/clawsweeper-state` is forked from OpenClaw for the dashboard renderer on
+`main`, but the generated `state` branch is a **fresh bootstrap** — it does not carry
+OpenClaw's historical sweep records (~2.6 GB). ClawSweeper fills `records/`, `jobs/`,
+and `results/` as Arc Forge reviews run.
+
+Local checkout when needed:
+
+```bash
+# Dashboard renderer source (small)
+git clone --branch main --single-branch --depth 1 \
+  https://github.com/arcforgelabs/clawsweeper-state.git clawsweeper-state
+
+# Generated state only (grows with our reviews; stay shallow)
+git clone --branch state --single-branch --depth 1 \
+  https://github.com/arcforgelabs/clawsweeper-state.git /tmp/clawsweeper-state-live
+```
+
+Do not full-clone the entire repo history unless you are debugging the state repo itself.
+
 ## Phase 1 bootstrap (conservative)
 
 Goal: review selected repos, write durable state, sync maintainer-facing comments, and **not** auto-close, autofix, or automerge.
