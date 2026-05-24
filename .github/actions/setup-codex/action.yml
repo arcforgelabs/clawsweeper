@@ -5,8 +5,8 @@ inputs:
     description: Codex CLI npm package version.
     default: "0.128.0"
   auth-mode:
-    description: Authentication mode. Use proxy to keep OPENAI_API_KEY out of Codex subprocesses, or login for legacy codex login.
-    default: "proxy"
+    description: Authentication mode. subscription writes CODEX_HOME/auth.json from CODEX_AUTH_JSON_B64; proxy uses OPENAI_API_KEY via the responses proxy; login uses codex login --with-api-key.
+    default: "subscription"
   codex-home:
     description: CODEX_HOME directory. Defaults to an isolated per-run ClawSweeper directory.
     default: ""
@@ -20,7 +20,7 @@ runs:
   using: composite
   steps:
     - name: Cache Codex CLI and npm downloads
-      uses: actions/cache@v5
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: |
           ~/.npm
@@ -62,6 +62,19 @@ runs:
         echo "CODEX_HOME=$codex_home" >> "$GITHUB_ENV"
         export CODEX_HOME="$codex_home"
         echo "Using isolated CODEX_HOME=$CODEX_HOME"
+
+    - name: Authenticate Codex with subscription auth.json
+      if: ${{ inputs['auth-mode'] == 'subscription' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        export CODEX_HOME="${CODEX_HOME:?}"
+        test -n "${CODEX_AUTH_JSON_B64:-}"
+        printf '%s' "$CODEX_AUTH_JSON_B64" | base64 -d > "$CODEX_HOME/auth.json"
+        chmod 600 "$CODEX_HOME/auth.json"
+        if [[ "${{ inputs['login-status'] }}" == "true" ]]; then
+          codex login status
+        fi
 
     - name: Authenticate Codex through Responses proxy
       if: ${{ inputs['auth-mode'] == 'proxy' }}
@@ -110,7 +123,7 @@ runs:
         fi
 
     - name: Reject unknown Codex auth mode
-      if: ${{ inputs['auth-mode'] != 'proxy' && inputs['auth-mode'] != 'login' }}
+      if: ${{ inputs['auth-mode'] != 'proxy' && inputs['auth-mode'] != 'login' && inputs['auth-mode'] != 'subscription' }}
       shell: bash
       run: |
         echo "Unsupported setup-codex auth-mode: ${{ inputs['auth-mode'] }}" >&2

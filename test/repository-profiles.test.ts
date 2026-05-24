@@ -4,62 +4,42 @@ import test from "node:test";
 import { REPOSITORY_PROFILES, repositoryProfileFor } from "../dist/repository-profiles.js";
 
 test("repositoryProfileFor matches mixed-case input against canonical profiles", () => {
-  const profile = repositoryProfileFor("OpenClaw/ClawHub");
+  const profile = repositoryProfileFor("ArcForgeLabs/arc-forge-console");
 
-  assert.equal(profile.targetRepo, "openclaw/clawhub");
-  assert.equal(profile.slug, "openclaw-clawhub");
-  assert.deepEqual(profile.applyCloseRules.issue, ["implemented_on_main"]);
-  assert.deepEqual(profile.applyCloseRules.pull_request, [
-    "implemented_on_main",
-    "mostly_implemented_on_main",
-  ]);
-});
-
-test("repositoryProfileFor supports fs-safe event reviews", () => {
-  const profile = repositoryProfileFor("OpenClaw/fs-safe");
-
-  assert.equal(profile.targetRepo, "openclaw/fs-safe");
-  assert.equal(profile.slug, "openclaw-fs-safe");
-  assert.equal(profile.checkoutDir, "fs-safe");
-  assert.deepEqual(profile.applyCloseRules.issue, ["implemented_on_main"]);
-  assert.deepEqual(profile.applyCloseRules.pull_request, [
-    "implemented_on_main",
-    "mostly_implemented_on_main",
-  ]);
-});
-
-test("generic OpenClaw fallback supports conservative event-only onboarding", () => {
-  const profile = repositoryProfileFor("OpenClaw/example-tool");
-
-  assert.equal(profile.targetRepo, "openclaw/example-tool");
-  assert.equal(profile.slug, "openclaw-example-tool");
-  assert.equal(profile.displayName, "example-tool");
-  assert.equal(profile.checkoutDir, "example-tool");
-  assert.match(profile.promptNote, /generic OpenClaw onboarding profile/);
-  assert.match(profile.promptNote, /current default branch/);
-  assert.deepEqual(profile.applyCloseRules.issue, ["implemented_on_main"]);
-  assert.deepEqual(profile.applyCloseRules.pull_request, [
-    "implemented_on_main",
-    "mostly_implemented_on_main",
-  ]);
-});
-
-test("generic steipete fallback starts review-only", () => {
-  const profile = repositoryProfileFor("Steipete/example-tool");
-
-  assert.equal(profile.targetRepo, "steipete/example-tool");
-  assert.equal(profile.slug, "steipete-example-tool");
-  assert.equal(profile.displayName, "example-tool");
-  assert.equal(profile.checkoutDir, "example-tool");
-  assert.match(profile.promptNote, /generic personal-repository onboarding profile/);
+  assert.equal(profile.targetRepo, "arcforgelabs/arc-forge-console");
+  assert.equal(profile.slug, "arcforgelabs-arc-forge-console");
+  assert.equal(profile.checkoutDir, "arc-forge-console");
   assert.deepEqual(profile.applyCloseRules.issue, []);
   assert.deepEqual(profile.applyCloseRules.pull_request, []);
 });
 
-test("generic OpenClaw fallback keeps denied repositories unsupported", () => {
+test("repositoryProfileFor supports Arc Forge ClawSweeper self-review", () => {
+  const profile = repositoryProfileFor("arcforgelabs/clawsweeper");
+
+  assert.equal(profile.targetRepo, "arcforgelabs/clawsweeper");
+  assert.equal(profile.slug, "arcforgelabs-clawsweeper");
+  assert.equal(profile.checkoutDir, "clawsweeper");
+  assert.deepEqual(profile.applyCloseRules.issue, []);
+  assert.deepEqual(profile.applyCloseRules.pull_request, []);
+});
+
+test("generic Arc Forge fallback supports conservative event-only onboarding", () => {
+  const profile = repositoryProfileFor("arcforgelabs/example-tool");
+
+  assert.equal(profile.targetRepo, "arcforgelabs/example-tool");
+  assert.equal(profile.slug, "arcforgelabs-example-tool");
+  assert.equal(profile.displayName, "example-tool");
+  assert.equal(profile.checkoutDir, "example-tool");
+  assert.match(profile.promptNote, /conservative Arc Forge onboarding profile/);
+  assert.match(profile.promptNote, /current default branch/);
+  assert.deepEqual(profile.applyCloseRules.issue, []);
+  assert.deepEqual(profile.applyCloseRules.pull_request, []);
+});
+
+test("generic Arc Forge fallback keeps denied repositories unsupported", () => {
   assert.throws(
-    () => repositoryProfileFor("openclaw/clawsweeper-state"),
-    /Unsupported target repo: openclaw\/clawsweeper-state/,
+    () => repositoryProfileFor("arcforgelabs/clawsweeper-state"),
+    /Unsupported target repo: arcforgelabs\/clawsweeper-state/,
   );
 });
 

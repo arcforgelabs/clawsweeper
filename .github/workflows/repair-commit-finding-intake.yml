@@ -86,7 +86,7 @@ jobs:
     runs-on: ${{ github.event.inputs.runner || vars.CLAWSWEEPER_COMMIT_FINDING_RUNNER || 'blacksmith-16vcpu-ubuntu-2404' }}
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           filter: blob:none
           fetch-depth: 0
@@ -152,8 +152,10 @@ jobs:
         with:
           version: ${{ env.CODEX_CLI_VERSION }}
           cache-suffix: target-pnpm
+          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
 
       - name: Review synthetic result
         if: ${{ steps.prepare.outputs.should_repair == 'true' }}

@@ -66,7 +66,7 @@ on:
       batch_size:
         description: "Items per worker job"
         required: false
-        default: "3"
+        default: "1"
       codex_timeout_ms:
         description: "Per-item Codex timeout in milliseconds"
         required: false
@@ -74,7 +74,7 @@ on:
       shard_count:
         description: "Parallel shards (capped by config/automation-limits.json)"
         required: false
-        default: "39"
+        default: "1"
       item_number:
         description: "Optional single issue/PR number to review"
         required: false
@@ -107,24 +107,25 @@ on:
         description: "Refresh audit state without running review or apply work"
         required: false
         default: "false"
-  schedule:
-    - cron: "*/5 * * * *"
-    # ClawHub review/apply schedules stay opt-in until the ClawSweeper app is installed there.
-    - cron: "2/5 * * * *"
-    - cron: "7 */6 * * *"
-    - cron: "12 */6 * * *"
-    - cron: "17 */6 * * *"
-    - cron: "1/5 * * * *"
-    - cron: "22 * * * *"
-    - cron: "3 * * * *"
-    - cron: "18 * * * *"
-    - cron: "33 * * * *"
-    - cron: "48 * * * *"
-    - cron: "8,23,38,53 * * * *"
-    - cron: "6,21,36,51 * * * *"
-    - cron: "4/15 * * * *"
-    - cron: "41 * * * *"
-    - cron: "37 */6 * * *"
+  # Arc Forge bootstrap: keep schedules disabled until the first manual verification
+  # sweep succeeds and CLAWSWEEPER_ENABLE_SCHEDULES=1 is set on the repo.
+  # schedule:
+  #   - cron: "*/5 * * * *"
+  #   - cron: "2/5 * * * *"
+  #   - cron: "7 */6 * * *"
+  #   - cron: "12 */6 * * *"
+  #   - cron: "17 */6 * * *"
+  #   - cron: "1/5 * * * *"
+  #   - cron: "22 * * * *"
+  #   - cron: "3 * * * *"
+  #   - cron: "18 * * * *"
+  #   - cron: "33 * * * *"
+  #   - cron: "48 * * * *"
+  #   - cron: "8,23,38,53 * * * *"
+  #   - cron: "6,21,36,51 * * * *"
+  #   - cron: "4/15 * * * *"
+  #   - cron: "41 * * * *"
+  #   - cron: "37 */6 * * *"
 
 permissions:
   contents: write
@@ -165,7 +166,7 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
@@ -297,10 +298,12 @@ jobs:
       - uses: ./.github/actions/setup-codex
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
+          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
           login-status: "true"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ${{ steps.target.outputs.target_checkout_dir }}-cache.git
           key: ${{ steps.target.outputs.target_repo_name }}-event-git-${{ runner.os }}-${{ github.run_id }}
@@ -568,7 +571,7 @@ jobs:
       actions: write
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
@@ -657,7 +660,7 @@ jobs:
       target_repo_name: ${{ steps.target.outputs.target_repo_name }}
       target_repo_owner: ${{ steps.target.outputs.target_repo_owner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: clawsweeper
           filter: blob:none
@@ -727,7 +730,7 @@ jobs:
           working-directory: clawsweeper
           build-script: build:all
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: clawsweeper-runtime-dist
           path: clawsweeper/dist
@@ -975,7 +978,7 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: clawsweeper
           filter: blob:none
@@ -1008,11 +1011,11 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: clawsweeper-runtime-dist
           path: clawsweeper/dist
@@ -1020,12 +1023,14 @@ jobs:
       - uses: ./clawsweeper/.github/actions/setup-codex
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
+          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
           login-status: "true"
 
       - uses: ./clawsweeper/.github/actions/setup-media-proof-tools
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ${{ needs.plan.outputs.target_checkout_dir }}-cache.git
           key: ${{ needs.plan.outputs.target_repo_name }}-git-${{ runner.os }}-${{ github.run_id }}
@@ -1148,7 +1153,7 @@ jobs:
           }
           JSON
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: review-shard-${{ matrix.shard }}
@@ -1156,14 +1161,14 @@ jobs:
             review-artifacts/shard-${{ matrix.shard }}/*.md
           if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: review-failed-shard-${{ matrix.shard }}
           path: review-artifacts/failed-shards/shard-${{ matrix.shard }}.json
           if-no-files-found: ignore
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: review-metrics-${{ matrix.shard }}
@@ -1177,7 +1182,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
@@ -1210,13 +1215,13 @@ jobs:
         with:
           build-script: build:all
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: review-shard-*
           path: artifacts
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
           pattern: review-metrics-*
@@ -1551,7 +1556,7 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         id: failed-shards
         continue-on-error: true
         with:
@@ -1641,7 +1646,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
@@ -1760,7 +1765,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
