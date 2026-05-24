@@ -1,6 +1,6 @@
 name: ClawSweeper
 
-run-name: ${{ (github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')) && 'Fan out ClawSweeper targets' || (github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_target_sweep' && github.event.client_payload.hot_intake == 'true') && format('Review hot target repo {0}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools') || (github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_target_sweep') && format('Review target repo {0}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools') || github.event_name == 'repository_dispatch' && format('Review event item {0}#{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools', github.event.client_payload.item_number || '?') || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true' && github.event.inputs.apply_sync_comments_only == 'true') || (github.event_name == 'schedule' && github.event.schedule == '6,21,36,51 * * * *')) && 'Sync Codex review comments' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *'))) && 'Apply ClawSweeper closures' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) && 'Audit ClawSweeper state' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'Review hot ClawSweeper items' || 'Review ClawSweeper items' }}
+run-name: ${{ (github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')) && 'Fan out ClawSweeper targets' || (github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_target_sweep' && github.event.client_payload.hot_intake == 'true') && format('Review hot target repo {0}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console') || (github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_target_sweep') && format('Review target repo {0}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console') || github.event_name == 'repository_dispatch' && format('Review event item {0}#{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || '?') || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true' && github.event.inputs.apply_sync_comments_only == 'true') || (github.event_name == 'schedule' && github.event.schedule == '6,21,36,51 * * * *')) && 'Sync Codex review comments' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *'))) && 'Apply ClawSweeper closures' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) && 'Audit ClawSweeper state' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'Review hot ClawSweeper items' || 'Review ClawSweeper items' }}
 
 on:
   repository_dispatch:
@@ -10,7 +10,7 @@ on:
       target_repo:
         description: "Repository to sweep"
         required: false
-        default: "arcforgelabs/arc-forge-tools"
+        default: "arcforgelabs/arc-forge-console"
       apply_existing:
         description: "Apply existing proposed close decisions without rerunning Codex; skips items changed since review"
         required: false
@@ -137,7 +137,7 @@ env:
   CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
 
 concurrency:
-  group: ${{ (github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')) && format('clawsweeper-target-fanout-{0}', github.event.schedule || github.run_id) || github.event_name == 'repository_dispatch' && format('clawsweeper-event-{0}-{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools', github.event.client_payload.item_number || github.run_id) || format('{0}-{1}', ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true' && github.event.inputs.apply_sync_comments_only == 'true') || (github.event_name == 'schedule' && github.event.schedule == '6,21,36,51 * * * *')) && 'clawsweeper-comment-sync' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *'))) && 'clawsweeper-apply' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.item_number != '' || github.event.inputs.item_numbers != '')) && format('clawsweeper-intake-exact-{0}', github.event.inputs.item_number || github.event.inputs.item_numbers) || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'clawsweeper-intake-v2' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) && 'clawsweeper-audit' || 'clawsweeper-review', github.event.inputs.target_repo || github.event.client_payload.target_repo || ((github.event.schedule == '17 */6 * * *') && 'openclaw/clawsweeper' || ((github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '12 */6 * * *') && 'openclaw/clawhub' || 'arcforgelabs/arc-forge-tools'))) }}
+  group: ${{ (github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')) && format('clawsweeper-target-fanout-{0}', github.event.schedule || github.run_id) || github.event_name == 'repository_dispatch' && format('clawsweeper-event-{0}-{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || github.run_id) || format('{0}-{1}', ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true' && github.event.inputs.apply_sync_comments_only == 'true') || (github.event_name == 'schedule' && github.event.schedule == '6,21,36,51 * * * *')) && 'clawsweeper-comment-sync' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *'))) && 'clawsweeper-apply' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.item_number != '' || github.event.inputs.item_numbers != '')) && format('clawsweeper-intake-exact-{0}', github.event.inputs.item_number || github.event.inputs.item_numbers) || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'clawsweeper-intake-v2' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) && 'clawsweeper-audit' || 'clawsweeper-review', github.event.inputs.target_repo || github.event.client_payload.target_repo || ((github.event.schedule == '17 */6 * * *') && 'openclaw/clawsweeper' || ((github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '12 */6 * * *') && 'openclaw/clawhub' || 'arcforgelabs/arc-forge-console'))) }}
   cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
 
 jobs:
@@ -157,7 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     concurrency:
-      group: clawsweeper-event-review-${{ github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools' }}-${{ github.event.client_payload.item_number || github.run_id }}
+      group: clawsweeper-event-review-${{ github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console' }}-${{ github.event.client_payload.item_number || github.run_id }}
       cancel-in-progress: true
     permissions:
       actions: write
@@ -175,7 +175,7 @@ jobs:
         id: target
         run: |
           set -euo pipefail
-          target_repo="${{ github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-tools' }}"
+          target_repo="${{ github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console' }}"
           target_branch="${{ github.event.client_payload.target_branch || 'main' }}"
           item_number="${{ github.event.client_payload.item_number || '' }}"
           item_kind="${{ github.event.client_payload.item_kind || '' }}"
@@ -674,7 +674,7 @@ jobs:
                 target_repo="openclaw/clawhub"
                 ;;
               *)
-                target_repo="arcforgelabs/arc-forge-tools"
+                target_repo="arcforgelabs/arc-forge-console"
               ;;
             esac
           fi
@@ -844,7 +844,7 @@ jobs:
             else
               batch_size="${{ github.event.client_payload.batch_size || github.event.inputs.batch_size || '3' }}"
             fi
-            if [ "$target_repo" = "arcforgelabs/arc-forge-tools" ]; then
+            if [ "$target_repo" = "arcforgelabs/arc-forge-console" ]; then
               min_active_shards="$normal_active_floor"
             else
               min_active_shards="0"
@@ -1280,7 +1280,7 @@ jobs:
             --rebase-strategy theirs
 
       - name: Dispatch reproducible bug implementation candidates
-        if: ${{ success() && needs.plan.outputs.target_repo == 'arcforgelabs/arc-forge-tools' && vars.CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS == '1' }}
+        if: ${{ success() && needs.plan.outputs.target_repo == 'arcforgelabs/arc-forge-console' && vars.CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS == '1' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPO: ${{ needs.plan.outputs.target_repo }}
@@ -1334,7 +1334,7 @@ jobs:
           done < /tmp/issue-implementation-candidates.tsv
 
       - name: Dispatch vision-fit implementation candidates
-        if: ${{ success() && needs.plan.outputs.target_repo == 'arcforgelabs/arc-forge-tools' && vars.CLAWSWEEPER_AUTO_IMPLEMENT_VISION_FIT == '1' }}
+        if: ${{ success() && needs.plan.outputs.target_repo == 'arcforgelabs/arc-forge-console' && vars.CLAWSWEEPER_AUTO_IMPLEMENT_VISION_FIT == '1' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_REPO: ${{ needs.plan.outputs.target_repo }}
@@ -1659,7 +1659,7 @@ jobs:
                 target_repo="openclaw/clawsweeper"
                 ;;
               *)
-                target_repo="arcforgelabs/arc-forge-tools"
+                target_repo="arcforgelabs/arc-forge-console"
                 ;;
             esac
           fi
@@ -1775,7 +1775,7 @@ jobs:
                 target_repo="openclaw/clawhub"
                 ;;
               *)
-                target_repo="arcforgelabs/arc-forge-tools"
+                target_repo="arcforgelabs/arc-forge-console"
                 ;;
             esac
           fi
@@ -2167,7 +2167,7 @@ jobs:
             -f apply_checkpoint_size="$APPLY_CHECKPOINT_SIZE"
 
       - name: Queue review backstops
-        if: ${{ success() && steps.target.outputs.target_repo == 'arcforgelabs/arc-forge-tools' }}
+        if: ${{ success() && steps.target.outputs.target_repo == 'arcforgelabs/arc-forge-console' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -2222,7 +2222,7 @@ jobs:
               --ref main \
               -f apply_existing=false \
               -f hot_intake=true \
-              -f target_repo=arcforgelabs/arc-forge-tools \
+              -f target_repo=arcforgelabs/arc-forge-console \
               -f batch_size=1 \
               -f shard_count="$hot_intake_shards" \
               -f codex_timeout_ms=600000
@@ -2234,7 +2234,7 @@ jobs:
               --ref main \
               -f apply_existing=false \
               -f hot_intake=false \
-              -f target_repo=arcforgelabs/arc-forge-tools \
+              -f target_repo=arcforgelabs/arc-forge-console \
               -f batch_size=3 \
               -f shard_count="$normal_shards" \
               -f codex_timeout_ms=600000

@@ -9,7 +9,7 @@ This document is the operator runbook for bootstrap, conservative mode, and roll
 |------|------|
 | [arcforgelabs/clawsweeper](https://github.com/arcforgelabs/clawsweeper) | Review engine, workflows, repair router |
 | [arcforgelabs/clawsweeper-state](https://github.com/arcforgelabs/clawsweeper-state) | Generated state on branch `state`; dashboard renderer on `main` |
-| Target repos (phase 1) | `arcforgelabs/arc-forge-tools` first, then expand deliberately |
+| Target repos (phase 1) | `arcforgelabs/arc-forge-console` first, then expand deliberately |
 
 Upstream reference: [openclaw/clawsweeper](https://github.com/openclaw/clawsweeper).
 
@@ -19,7 +19,7 @@ Goal: review selected repos, write durable state, sync maintainer-facing comment
 
 Configured policy in `config/target-repositories.json`:
 
-- Primary target: `arcforgelabs/arc-forge-tools`
+- Primary target: `arcforgelabs/arc-forge-console`
 - Self-review: `arcforgelabs/clawsweeper`
 - Generic `arcforgelabs/*` fallback: review-only (`apply_close_rules` empty for issues and PRs)
 
@@ -53,7 +53,7 @@ Install on:
 
 - `arcforgelabs/clawsweeper`
 - `arcforgelabs/clawsweeper-state`
-- `arcforgelabs/arc-forge-tools` (first target)
+- `arcforgelabs/arc-forge-console` (first target)
 
 Minimum permissions:
 
@@ -86,15 +86,15 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 ## Verification checklist
 
 1. **CI** — `pnpm run check` passes on `arcforgelabs/clawsweeper` `main`.
-2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-tools`, `apply_existing=false`, one `item_number` if available.
+2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, one `item_number` if available.
 3. **Scheduled review** — confirm the hourly/daily cron picks up open items after secrets are configured.
-4. **Event review** — open or edit an issue/PR in `arc-forge-tools`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
+4. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
 5. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
 6. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.
 
 ## Rollout order (recommended)
 
-1. ClawSweeper dry-run / review-only on `arc-forge-tools`
+1. ClawSweeper dry-run / review-only on `arc-forge-console`
 2. State publishing + dashboard on `clawsweeper-state`
 3. Enable public comments on selected repos (already on in bootstrap once App write perms exist)
 4. Add guarded close/fix workflows repo-by-repo after trust is established
@@ -110,7 +110,7 @@ pnpm install
 pnpm run build
 git -C ../clawsweeper-state switch state
 node scripts/hydrate-state.ts --state-dir ../clawsweeper-state
-pnpm run plan -- --target-repo arcforgelabs/arc-forge-tools --batch-size 1 --shard-count 1 --max-pages 5
+pnpm run plan -- --target-repo arcforgelabs/arc-forge-console --batch-size 1 --shard-count 1 --max-pages 5
 ```
 
 Requires Node 24 and a configured Codex/OpenAI environment for live review runs.

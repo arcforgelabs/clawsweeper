@@ -33,6 +33,17 @@
       }
     },
     {
+      "target_repo": "arcforgelabs/arc-forge-console",
+      "display_name": "Arc Forge Console",
+      "checkout_dir": "arc-forge-console",
+      "docs_url": "https://docs.arcforge.au",
+      "prompt_note": "Use the arc-forge-console source tree and current main branch. Review console, auth, billing, and customer-facing workflow changes conservatively during bootstrap. Keep issues and pull requests open unless certainly implemented on main.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      }
+    },
+    {
       "target_repo": "arcforgelabs/clawsweeper",
       "display_name": "Arc Forge ClawSweeper",
       "checkout_dir": "clawsweeper",
