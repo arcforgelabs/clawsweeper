@@ -31,6 +31,16 @@
         "issue": ["implemented_on_main"],
         "pull_request": ["implemented_on_main", "mostly_implemented_on_main"]
       }
+    },
+    {
+      "target_repo": "arcforgelabs/clawsweeper",
+      "display_name": "Arc Forge ClawSweeper",
+      "checkout_dir": "clawsweeper",
+      "prompt_note": "Use the Arc Forge ClawSweeper source tree and current main branch. During bootstrap, review automation and workflow changes conservatively and keep issues and pull requests open unless certainly implemented on main.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      }
     }
   ],
   "generic_fallbacks": [
@@ -53,11 +63,26 @@
         "issue": [],
         "pull_request": []
       }
+    },
+    {
+      "owner": "arcforgelabs",
+      "deny_repositories": ["arcforgelabs/clawsweeper-state", "arcforgelabs/.github"],
+      "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
+      "prompt_note": "Use the {target_repo} source tree and current default branch. This repository uses the conservative Arc Forge onboarding profile: review and durable comments only; do not auto-close issues or pull requests unless a repository-specific profile later enables that policy.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      }
     }
   ],
   "target_inventory": {
-    "owners": ["openclaw", "steipete"],
-    "deny_repositories": ["openclaw/clawsweeper-state", "openclaw/.github"],
+    "owners": ["arcforgelabs"],
+    "deny_repositories": [
+      "openclaw/clawsweeper-state",
+      "openclaw/.github",
+      "arcforgelabs/clawsweeper-state",
+      "arcforgelabs/.github"
+    ],
     "include_private": false,
     "include_archived": false,
     "include_forks": false,
