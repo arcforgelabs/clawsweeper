@@ -40,9 +40,9 @@ Goal: review selected repos, write durable state, sync maintainer-facing comment
 
 Configured policy in `config/target-repositories.json`:
 
-- Primary target: `arcforgelabs/arc-forge-console`
-- Self-review: `arcforgelabs/clawsweeper`
+- Primary targets: `arcforgelabs/arc-forge-console`, `arcforgelabs/clawsweeper`
 - Generic `arcforgelabs/*` fallback: review-only (`apply_close_rules` empty for issues and PRs)
+- OpenClaw repository profiles remain for upstream compatibility and apply/reconcile paths, but `target_inventory.owners` is `["arcforgelabs"]` only so scheduled fanout does not sweep OpenClaw repos during bootstrap
 
 Repository variables on `arcforgelabs/clawsweeper`:
 

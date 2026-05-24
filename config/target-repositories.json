@@ -2,6 +2,37 @@
   "schema_version": 2,
   "repositories": [
     {
+      "target_repo": "openclaw/clawhub",
+      "display_name": "ClawHub",
+      "checkout_dir": "clawhub",
+      "community_url": "https://clawhub.ai/",
+      "prompt_note": "Use the ClawHub source tree and current main branch. Review every issue and PR with the same evidence standard. Propose auto-close for issues and pull requests that are certainly implemented on main; for pull requests only, also allow age-gated mostly implemented on main. Keep everything else open.",
+      "apply_close_rules": {
+        "issue": ["implemented_on_main"],
+        "pull_request": ["implemented_on_main", "mostly_implemented_on_main"]
+      }
+    },
+    {
+      "target_repo": "openclaw/clawsweeper",
+      "display_name": "ClawSweeper",
+      "checkout_dir": "clawsweeper",
+      "prompt_note": "Use the ClawSweeper source tree and current main branch. Review bot automation, workflow, and documentation changes conservatively. Propose auto-close for issues and pull requests that are certainly implemented on main; for pull requests only, also allow age-gated mostly implemented on main. Keep everything else open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": ["implemented_on_main"],
+        "pull_request": ["implemented_on_main", "mostly_implemented_on_main"]
+      }
+    },
+    {
+      "target_repo": "openclaw/fs-safe",
+      "display_name": "fs-safe",
+      "checkout_dir": "fs-safe",
+      "prompt_note": "Use the fs-safe source tree and current main branch. Review filesystem-safety, path-handling, and package changes conservatively. Propose auto-close for issues and pull requests that are certainly implemented on main; for pull requests only, also allow age-gated mostly implemented on main. Keep everything else open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": ["implemented_on_main"],
+        "pull_request": ["implemented_on_main", "mostly_implemented_on_main"]
+      }
+    },
+    {
       "target_repo": "arcforgelabs/arc-forge-console",
       "display_name": "Arc Forge Console",
       "checkout_dir": "arc-forge-console",
@@ -25,6 +56,26 @@
   ],
   "generic_fallbacks": [
     {
+      "owner": "openclaw",
+      "deny_repositories": ["openclaw/clawsweeper-state", "openclaw/.github"],
+      "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
+      "prompt_note": "Use the {target_repo} source tree and current default branch. This repository is using the generic OpenClaw onboarding profile, so keep review conservative: issues and pull requests may be auto-closed only when the exact change is certainly already implemented on the default branch; pull requests may also be age-gated mostly implemented there.",
+      "apply_close_rules": {
+        "issue": ["implemented_on_main"],
+        "pull_request": ["implemented_on_main", "mostly_implemented_on_main"]
+      }
+    },
+    {
+      "owner": "steipete",
+      "deny_repositories": [],
+      "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
+      "prompt_note": "Use the {target_repo} source tree and current default branch. This repository is using the generic personal-repository onboarding profile, so review conservatively and do not auto-close issues or pull requests unless a repository-specific profile later enables that policy.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      }
+    },
+    {
       "owner": "arcforgelabs",
       "deny_repositories": ["arcforgelabs/clawsweeper-state", "arcforgelabs/.github"],
       "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
@@ -38,6 +89,8 @@
   "target_inventory": {
     "owners": ["arcforgelabs"],
     "deny_repositories": [
+      "openclaw/clawsweeper-state",
+      "openclaw/.github",
       "arcforgelabs/clawsweeper-state",
       "arcforgelabs/.github"
     ],

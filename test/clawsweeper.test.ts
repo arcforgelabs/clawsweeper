@@ -11245,7 +11245,7 @@ test("sweep workflow_dispatch input count stays under GitHub limit", () => {
   const workflow = readFileSync(".github/workflows/sweep.yml", "utf8");
   const inputBlock = workflow.slice(
     workflow.indexOf("  workflow_dispatch:\n    inputs:"),
-    workflow.indexOf("\n  schedule:"),
+    workflow.indexOf("\npermissions:"),
   );
   const inputNames = [...inputBlock.matchAll(/^      [A-Za-z0-9_]+:/gm)];
 
