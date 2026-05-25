@@ -818,6 +818,7 @@ jobs:
           commit_page_size="$(limit commit_review.page_size_default)"
           active_critical_workers="$(( $(active_run_count "repair cluster worker") + $(active_sweep_exact_count) ))"
           active_background_workers="$(( $(active_run_count "ClawSweeper Commit Review") * commit_page_size + $(active_sweep_background_workers) ))"
+          active_oauth_workers="$(( active_critical_workers + active_background_workers ))"
           hot_intake_shards="$(worker_limit hot_intake --active-critical "$active_critical_workers" --active-background "$active_background_workers")"
           normal_shards="$(worker_limit normal_review --active-critical "$active_critical_workers" --active-background "$active_background_workers")"
           hot_intake="${{ ((github.event_name == 'repository_dispatch' && github.event.client_payload.hot_intake == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'true' || 'false' }}"
@@ -888,7 +889,19 @@ jobs:
             echo "min_active_shards=$min_active_shards"
             echo "min_backfill_review_age_minutes=$min_backfill_review_age_minutes"
             echo "shard_count=$shard_count"
+            echo "active_oauth_workers=$active_oauth_workers"
           } >> "$GITHUB_OUTPUT"
+
+      - uses: ./clawsweeper/.github/actions/setup-codexbar
+        if: vars.CLAWSWEEPER_BUDGET_ENABLED == '1'
+
+      - uses: ./clawsweeper/.github/actions/setup-codex
+        if: vars.CLAWSWEEPER_BUDGET_ENABLED == '1'
+        env:
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE != 'subscription' && secrets.OPENAI_API_KEY || '' }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+        with:
+          auth-mode: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
 
       - id: select
         working-directory: clawsweeper
@@ -903,6 +916,8 @@ jobs:
           MIN_BACKFILL_REVIEW_AGE_MINUTES: ${{ steps.mode.outputs.min_backfill_review_age_minutes }}
           TARGET_REPO: ${{ steps.target.outputs.target_repo }}
           GH_TOKEN: ${{ steps.target-read-token.outputs.token || github.token }}
+          CLAWSWEEPER_BUDGET_ENABLED: ${{ vars.CLAWSWEEPER_BUDGET_ENABLED || '0' }}
+          CLAWSWEEPER_ACTIVE_OAUTH_WORKERS: ${{ steps.mode.outputs.active_oauth_workers }}
         run: |
           set -euo pipefail
           item_arg=()
@@ -921,6 +936,7 @@ jobs:
             --batch-size "$BATCH_SIZE" \
             --max-pages "$MAX_PAGES" \
             --shard-count "$SHARD_COUNT" \
+            --active-oauth-workers "$CLAWSWEEPER_ACTIVE_OAUTH_WORKERS" \
             --codex-model gpt-5.5 \
             --codex-reasoning-effort medium \
             --codex-sandbox danger-full-access \

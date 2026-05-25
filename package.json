@@ -10,6 +10,7 @@
     "build:dashboard": "tsgo -p tsconfig.dashboard.json",
     "build:all": "pnpm run build && pnpm run build:repair && pnpm run build:dashboard",
     "plan": "node dist/clawsweeper.js plan",
+    "budget": "node dist/clawsweeper.js budget",
     "review": "node dist/clawsweeper.js review",
     "apply-artifacts": "node dist/clawsweeper.js apply-artifacts",
     "apply-decisions": "node dist/clawsweeper.js apply-decisions",
