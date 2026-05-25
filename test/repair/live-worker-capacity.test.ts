@@ -11,14 +11,14 @@ import {
 } from "../../dist/repair/live-worker-capacity.js";
 
 test("live worker capacity refuses limits above the global Codex cap", () => {
-  assert.equal(MAX_LIVE_WORKERS, 3);
+  assert.equal(MAX_LIVE_WORKERS, 15);
   assert.equal(
     readMaxLiveWorkers({ "max-live-workers": String(MAX_LIVE_WORKERS) }),
     MAX_LIVE_WORKERS,
   );
   assert.throws(
     () => readMaxLiveWorkers({ "max-live-workers": String(MAX_LIVE_WORKERS + 1) }),
-    /max-live-workers must be <= 3/,
+    /max-live-workers must be <= 15/,
   );
 });
 

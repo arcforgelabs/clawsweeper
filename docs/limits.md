@@ -31,7 +31,7 @@ The mental model:
 
 | Name | Current | Meaning |
 | --- | ---: | --- |
-| `workers.max` | 3 | Maximum global Codex worker budget used to derive lane limits. |
+| `workers.max` | 15 | Maximum global Codex worker budget used to derive lane limits. |
 | `workers.reserve_for_interactive` | 1 | Worker slots background lanes leave open for exact/manual/urgent work. |
 | `workers.expansion_reserve` | 1 | Extra slots background lanes leave open for independently planned matrix expansion. |
 | `workers.minimum_background` | 1 | Target floor for background progress when enough global capacity is available. |
@@ -40,24 +40,24 @@ The mental model:
 ## Derived Limits
 
 Derived limits are intentionally percentages of `workers.max`. With
-`workers.max = 3`, normal review can use 2 workers, hot intake can use 1,
-commit review can use 1 commit per page, and repair lanes can dispatch 1 live
+`workers.max = 15`, normal review can use 10 workers, hot intake can use 5,
+commit review can use 1 commit per page, and repair lanes can dispatch 6 live
 worker.
 
 | Name | Current | Meaning |
 | --- | ---: | --- |
 | `assist.default` | 5 | Maintainer assist job cap. |
-| `review_shards.normal_default` | 2 | Quiet-system normal review shard ceiling. |
-| `review_shards.normal_active_floor` | 1 | Minimum active normal review shards to keep queued for `openclaw/openclaw`. |
-| `review_shards.hot_intake_default` | 1 | Quiet-system broad hot-intake review shard ceiling. |
+| `review_shards.normal_default` | 10 | Quiet-system normal review shard ceiling. |
+| `review_shards.normal_active_floor` | 4 | Minimum active normal review shards to keep queued for `openclaw/openclaw`. |
+| `review_shards.hot_intake_default` | 5 | Quiet-system broad hot-intake review shard ceiling. |
 | `review_shards.exact_item_default` | 1 | Exact-item hot-intake shard count. |
-| `review_shards.hard_cap` | 3 | Maximum accepted review shard count. |
+| `review_shards.hard_cap` | 15 | Maximum accepted review shard count. |
 | `commit_review.page_size_default` | 1 | Commits selected per commit-review page. |
-| `commit_review.page_size_hard_cap` | 3 | Maximum commit-review page size. |
-| `repair_live_runs.default` | 1 | Default live repair workflow run cap for manual dispatch/requeue/self-heal. |
-| `repair_live_runs.hard_cap` | 3 | Absolute live repair run cap accepted by the CLI. |
-| `repair_live_runs.automerge_default` | 1 | Live repair run cap for automerge comment-router dispatches. |
-| `repair_live_runs.issue_implementation_default` | 1 | Live repair run cap for issue-to-PR implementation intake. |
+| `commit_review.page_size_hard_cap` | 15 | Maximum commit-review page size. |
+| `repair_live_runs.default` | 6 | Default live repair workflow run cap for manual dispatch/requeue/self-heal. |
+| `repair_live_runs.hard_cap` | 15 | Absolute live repair run cap accepted by the CLI. |
+| `repair_live_runs.automerge_default` | 6 | Live repair run cap for automerge comment-router dispatches. |
+| `repair_live_runs.issue_implementation_default` | 6 | Live repair run cap for issue-to-PR implementation intake. |
 | `issue_implementation.dispatches_per_sweep_default` | 1 | Maximum implementation intake jobs queued from one review publish run. |
 
 Formula summary:
@@ -100,12 +100,12 @@ priority work.
 
 Examples with the current config:
 
-- Quiet system: manual normal review can request 2 shards; scheduled normal
-  review gets 1 after reserving 1 slot for exact/manual/urgent work and 1
+- Quiet system: manual normal review can request 10 shards; scheduled normal
+  review also gets 10 after reserving 1 slot for exact/manual/urgent work and 1
   slot for in-flight matrix expansion.
 - 1 active repair worker and 1 active background worker: normal review gets
-  1 because `3 - 1 interactive reserve - 1 expansion reserve - 1 priority
-  - 1 background = -1`, and enabled lanes keep a minimum of one worker.
+  10 because `15 - 1 interactive reserve - 1 expansion reserve - 1 priority
+  - 1 background = 11`, then clamps to the normal review lane ceiling.
 - 49 active priority workers: commit review gets 1, so commit review yields but
   does not fully stall.
 
