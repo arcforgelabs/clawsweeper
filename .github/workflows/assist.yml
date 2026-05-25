@@ -1,6 +1,6 @@
 name: ClawSweeper assist
 
-run-name: ${{ format('Assist {0}#{1}', github.event.client_payload.target_repo || 'openclaw/openclaw', github.event.client_payload.item_number || '?') }}
+run-name: ${{ format('Assist {0}#{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || '?') }}
 
 on:
   repository_dispatch:
@@ -10,7 +10,7 @@ on:
       target_repo:
         description: "Repository containing the issue or PR"
         required: true
-        default: openclaw/openclaw
+        default: arcforgelabs/arc-forge-console
         type: string
       item_number:
         description: "Issue or PR number"
@@ -43,11 +43,11 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+  CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
   CODEX_CLI_VERSION: ${{ vars.CLAWSWEEPER_CODEX_CLI_VERSION || '0.128.0' }}
 
 concurrency:
-  group: ${{ format('clawsweeper-assist-{0}-{1}-{2}', github.event.client_payload.target_repo || inputs.target_repo || 'openclaw/openclaw', github.event.client_payload.item_number || inputs.item_number || github.run_id, github.event.client_payload.comment_id || inputs.comment_id || github.run_id) }}
+  group: ${{ format('clawsweeper-assist-{0}-{1}-{2}', github.event.client_payload.target_repo || inputs.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || inputs.item_number || github.run_id, github.event.client_payload.comment_id || inputs.comment_id || github.run_id) }}
   cancel-in-progress: false
 
 jobs:

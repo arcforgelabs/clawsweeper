@@ -3,16 +3,13 @@ import test from "node:test";
 
 import { REPOSITORY_PROFILES, repositoryProfileFor } from "../dist/repository-profiles.js";
 
-test("repositoryProfileFor matches mixed-case input against canonical profiles", () => {
-  const profile = repositoryProfileFor("OpenClaw/ClawHub");
+test("repositoryProfileFor matches mixed-case input against Arc Forge profiles", () => {
+  const profile = repositoryProfileFor("ArcForgeLabs/Arc-Forge-Console");
 
-  assert.equal(profile.targetRepo, "openclaw/clawhub");
-  assert.equal(profile.slug, "openclaw-clawhub");
-  assert.deepEqual(profile.applyCloseRules.issue, ["implemented_on_main"]);
-  assert.deepEqual(profile.applyCloseRules.pull_request, [
-    "implemented_on_main",
-    "mostly_implemented_on_main",
-  ]);
+  assert.equal(profile.targetRepo, "arcforgelabs/arc-forge-console");
+  assert.equal(profile.slug, "arcforgelabs-arc-forge-console");
+  assert.deepEqual(profile.applyCloseRules.issue, []);
+  assert.deepEqual(profile.applyCloseRules.pull_request, []);
 });
 
 test("repositoryProfileFor supports Arc Forge console reviews", () => {
@@ -35,22 +32,6 @@ test("repositoryProfileFor supports Arc Forge ClawSweeper self-review", () => {
   assert.deepEqual(profile.applyCloseRules.pull_request, []);
 });
 
-test("generic OpenClaw fallback supports conservative event-only onboarding", () => {
-  const profile = repositoryProfileFor("OpenClaw/example-tool");
-
-  assert.equal(profile.targetRepo, "openclaw/example-tool");
-  assert.equal(profile.slug, "openclaw-example-tool");
-  assert.equal(profile.displayName, "example-tool");
-  assert.equal(profile.checkoutDir, "example-tool");
-  assert.match(profile.promptNote, /generic OpenClaw onboarding profile/);
-  assert.match(profile.promptNote, /current default branch/);
-  assert.deepEqual(profile.applyCloseRules.issue, ["implemented_on_main"]);
-  assert.deepEqual(profile.applyCloseRules.pull_request, [
-    "implemented_on_main",
-    "mostly_implemented_on_main",
-  ]);
-});
-
 test("generic Arc Forge fallback supports conservative event-only onboarding", () => {
   const profile = repositoryProfileFor("arcforgelabs/example-tool");
 
@@ -59,6 +40,18 @@ test("generic Arc Forge fallback supports conservative event-only onboarding", (
   assert.equal(profile.displayName, "example-tool");
   assert.equal(profile.checkoutDir, "example-tool");
   assert.match(profile.promptNote, /conservative Arc Forge onboarding profile/);
+  assert.deepEqual(profile.applyCloseRules.issue, []);
+  assert.deepEqual(profile.applyCloseRules.pull_request, []);
+});
+
+test("generic IAMSamuelRodda fallback supports conservative event-only onboarding", () => {
+  const profile = repositoryProfileFor("IAMSamuelRodda/example-tool");
+
+  assert.equal(profile.targetRepo, "iamsamuelrodda/example-tool");
+  assert.equal(profile.slug, "iamsamuelrodda-example-tool");
+  assert.equal(profile.displayName, "example-tool");
+  assert.equal(profile.checkoutDir, "example-tool");
+  assert.match(profile.promptNote, /conservative IAMSamuelRodda onboarding profile/);
   assert.deepEqual(profile.applyCloseRules.issue, []);
   assert.deepEqual(profile.applyCloseRules.pull_request, []);
 });

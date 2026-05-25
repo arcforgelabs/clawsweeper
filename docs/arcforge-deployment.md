@@ -42,7 +42,9 @@ Configured policy in `config/target-repositories.json`:
 
 - Primary targets: `arcforgelabs/arc-forge-console`, `arcforgelabs/clawsweeper`
 - Generic `arcforgelabs/*` fallback: review-only (`apply_close_rules` empty for issues and PRs)
+- Generic `IAMSamuelRodda/*` fallback: review-only, available for manual/event use once the App is installed there
 - OpenClaw repository profiles remain for upstream compatibility and apply/reconcile paths, but `target_inventory.owners` is `["arcforgelabs"]` only so scheduled fanout does not sweep OpenClaw repos during bootstrap
+- `IAMSamuelRodda` is intentionally not in `target_inventory.owners`; add it later to make scheduled fanout include those repos
 
 Repository variables on `arcforgelabs/clawsweeper`:
 
@@ -51,7 +53,6 @@ Repository variables on `arcforgelabs/clawsweeper`:
 | `CLAWSWEEPER_CODEX_AUTH_MODE` | `subscription` | Use ChatGPT/Codex subscription auth instead of pay-as-you-go API key |
 | `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |
-| `CLAWSWEEPER_ENABLE_CLAWHUB` | unset | N/A for Arc Forge |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS` | unset / `0` | No issue implementation PRs |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_VISION_FIT` | unset / `0` | No vision-fit PRs |
 

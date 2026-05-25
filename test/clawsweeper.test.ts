@@ -11021,11 +11021,13 @@ test("sweep target tokens fall back when an org app installation is missing", ()
 
   assert.match(
     workflow,
-    /CLAWSWEEPER_INVENTORY_TOKEN_STEIPETE: \$\{\{ steps\.steipete-token\.outputs\.token \|\| '__public__' \}\}/,
+    /CLAWSWEEPER_INVENTORY_TOKEN_ARCFORGELABS: \$\{\{ steps\.arcforge-token\.outputs\.token \}\}/,
   );
-  const openclawInventoryBlocks = stepBlocks("Create OpenClaw inventory token");
-  assert.equal(openclawInventoryBlocks.length, 1);
-  assert.doesNotMatch(openclawInventoryBlocks[0] ?? "", /continue-on-error: true/);
+  assert.doesNotMatch(workflow, /CLAWSWEEPER_INVENTORY_TOKEN_STEIPETE/);
+  assert.doesNotMatch(workflow, /CLAWSWEEPER_INVENTORY_TOKEN_IAMSAMUELRODDA/);
+  const arcforgeInventoryBlocks = stepBlocks("Create Arc Forge inventory token");
+  assert.equal(arcforgeInventoryBlocks.length, 1);
+  assert.doesNotMatch(arcforgeInventoryBlocks[0] ?? "", /continue-on-error: true/);
   for (const name of [
     "Create target read token",
     "Create target write token",
@@ -11269,7 +11271,7 @@ test("sweep review continuations stay workflow-dispatch compatible", () => {
   }
 });
 
-test("target sweep dispatches preserve disabled ClawHub guard", () => {
+test("target sweep dispatches are schedule-gated for Arc Forge bootstrap", () => {
   const workflow = readFileSync(".github/workflows/sweep.yml", "utf8");
   const planHeader = workflow.slice(
     workflow.indexOf("\n  plan:"),
@@ -11279,8 +11281,9 @@ test("target sweep dispatches preserve disabled ClawHub guard", () => {
   assert.match(planHeader, /github\.event\.action == 'clawsweeper_target_sweep'/);
   assert.match(
     planHeader,
-    /github\.event_name == 'repository_dispatch' && github\.event\.client_payload\.target_repo == 'openclaw\/clawhub' && vars\.CLAWSWEEPER_ENABLE_CLAWHUB != '1'/,
+    /github\.event_name != 'schedule' \|\| vars\.CLAWSWEEPER_ENABLE_SCHEDULES == '1'/,
   );
+  assert.doesNotMatch(planHeader, /CLAWSWEEPER_ENABLE_CLAWHUB/);
 });
 
 test("sweep planning-started status publish is bounded", () => {
