@@ -39,6 +39,15 @@ import { stableJson } from "./stable-json.js";
 import { runText } from "./command.js";
 import { AUTOMATION_LIMITS } from "./limits.js";
 import {
+  backlogNeededWorkers,
+  logBudgetSummary,
+  readBudgetConfig,
+  resolveEffectiveWorkerCount,
+  resolveWorkerBudget,
+  resolveActiveOAuthWorkers,
+  type ResolvedWorkerBudget,
+} from "./budget/index.js";
+import {
   buildOpenClawPrSurfaceStats,
   renderOpenClawPrSurfaceSummary,
   renderOpenClawPrSurfaceTable,
@@ -12072,12 +12081,12 @@ ${renderReviewContextBudget(options.context)}
   `;
 }
 
-function planCommand(args: Args): void {
+async function planCommand(args: Args): Promise<void> {
   repoFromArgs(args);
   const itemsDir = resolve(stringArg(args.items_dir, defaultItemsDir()));
   const batchSize = numberArg(args.batch_size, DEFAULT_PLAN_BATCH_SIZE);
   const maxPages = numberArg(args.max_pages, 250);
-  const shardCount = numberArg(args.shard_count, DEFAULT_PLAN_SHARD_COUNT);
+  const requestedShardCount = numberArg(args.shard_count, DEFAULT_PLAN_SHARD_COUNT);
   const minimumActiveShards = numberArg(args.min_active_shards, 0);
   const minimumBackfillReviewAgeMs =
     numberArg(args.min_backfill_review_age_minutes, DEFAULT_BACKFILL_REVIEW_AGE_MINUTES) *
@@ -12091,6 +12100,36 @@ function planCommand(args: Args): void {
   const sandboxMode = stringArg(args.codex_sandbox, "read-only");
   const serviceTier = stringArg(args.codex_service_tier, DEFAULT_SERVICE_TIER);
   const reviewPolicy = reviewPolicyHash({ model, reasoningEffort, sandboxMode, serviceTier });
+  const workerBudget = await resolveWorkerBudget({
+    configuredMaxWorkers: requestedShardCount,
+    concurrencyLimit: MAX_PLAN_SHARD_COUNT,
+    activeOAuthWorkers: numberArg(args.active_oauth_workers, resolveActiveOAuthWorkers()),
+  });
+  await logBudgetSummary(workerBudget, readBudgetConfig());
+  const shardCount = workerBudget.effectiveWorkers;
+  if (shardCount <= 0) {
+    console.log(
+      JSON.stringify(
+        {
+          shards: [],
+          scannedPages: 0,
+          candidates: [],
+          capacity: 0,
+          dueBacklog: 0,
+          activeCodexTarget: 0,
+          oldestUnreviewedAt: undefined,
+          floorBackfill: 0,
+          capacityReason: "budget: Codex OAuth usage blocked worker launch",
+          reviewPolicy,
+          workerBudget: serializeWorkerBudget(workerBudget, 0),
+          matrix: [],
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
   const planOptions: Parameters<typeof planCandidates>[0] = {
     batchSize,
     maxPages,
@@ -12102,16 +12141,117 @@ function planCommand(args: Args): void {
   };
   if (hasItemNumbersInput || itemNumbers.length > 0) planOptions.itemNumbers = itemNumbers;
   if (hotIntake) planOptions.hotIntake = true;
-  const plan = planCandidates(planOptions);
+  let plan = planCandidates(planOptions);
+  const refinedShardCount = refinePlanShardCount({
+    plan,
+    batchSize,
+    requestedShardCount,
+    workerBudget,
+  });
+  if (refinedShardCount !== shardCount) {
+    plan = replanWithShardCount(plan, refinedShardCount, batchSize);
+  }
   console.log(
     JSON.stringify(
       {
         ...plan,
         reviewPolicy,
+        workerBudget: serializeWorkerBudget(workerBudget, refinedShardCount),
         matrix: plan.shards.map((shard) => ({
           shard: shard.shard,
           item_numbers: shard.itemNumbers.join(",") || "none",
         })),
+      },
+      null,
+      2,
+    ),
+  );
+}
+
+function refinePlanShardCount(options: {
+  plan: PlanCandidateResult;
+  batchSize: number;
+  requestedShardCount: number;
+  workerBudget: ResolvedWorkerBudget;
+}): number {
+  const backlog = backlogNeededWorkers(
+    options.plan.dueBacklog,
+    options.batchSize,
+    options.requestedShardCount,
+  );
+  return resolveEffectiveWorkerCount({
+    configuredMaxWorkers: options.requestedShardCount,
+    budgetRecommendedWorkers: options.workerBudget.decision.recommendedWorkers,
+    concurrencyLimit: MAX_PLAN_SHARD_COUNT,
+    backlogNeededWorkers: backlog,
+  });
+}
+
+function replanWithShardCount(
+  plan: PlanCandidateResult,
+  shardCount: number,
+  batchSize: number,
+): PlanCandidateResult {
+  if (shardCount <= 0) {
+    return {
+      ...plan,
+      shards: [],
+      capacity: 0,
+      activeCodexTarget: 0,
+    };
+  }
+  const count = planShardCount(shardCount);
+  const itemNumbers = plan.candidates.map((item) => item.number);
+  const shards = shardItemNumbers(itemNumbers, count);
+  return {
+    ...plan,
+    shards,
+    capacity: Math.max(1, batchSize) * count,
+    activeCodexTarget: activeCodexTarget(shards),
+  };
+}
+
+function serializeWorkerBudget(workerBudget: ResolvedWorkerBudget, effectiveShardCount: number) {
+  return {
+    enabled: workerBudget.enabled,
+    configuredMaxWorkers: workerBudget.configuredMaxWorkers,
+    recommendedWorkers: workerBudget.decision.recommendedWorkers,
+    effectiveWorkers: effectiveShardCount,
+    reason: workerBudget.decision.reason,
+    detail: workerBudget.decision.detail,
+    ...(workerBudget.backlogNeededWorkers !== undefined
+      ? { backlogNeededWorkers: workerBudget.backlogNeededWorkers }
+      : {}),
+    ...(workerBudget.decision.providerError
+      ? { providerError: workerBudget.decision.providerError }
+      : {}),
+    ...(workerBudget.decision.snapshot ? { snapshot: workerBudget.decision.snapshot } : {}),
+    ...(workerBudget.decision.firedHooks ? { firedHooks: workerBudget.decision.firedHooks } : {}),
+    ...(workerBudget.decision.scales ? { scales: workerBudget.decision.scales } : {}),
+  };
+}
+
+async function budgetCommand(args: Args): Promise<void> {
+  const configuredMaxWorkers = numberArg(
+    args.max_workers,
+    numberArg(args.shard_count, DEFAULT_PLAN_SHARD_COUNT),
+  );
+  const batchSize = numberArg(args.batch_size, DEFAULT_PLAN_BATCH_SIZE);
+  const dueBacklog = numberArg(args.due_backlog, 0);
+  const workerBudget = await resolveWorkerBudget({
+    configuredMaxWorkers,
+    concurrencyLimit: MAX_PLAN_SHARD_COUNT,
+    dueBacklog,
+    batchSize,
+    hasBacklog: dueBacklog > 0,
+    activeOAuthWorkers: numberArg(args.active_oauth_workers, resolveActiveOAuthWorkers()),
+  });
+  await logBudgetSummary(workerBudget, readBudgetConfig());
+  console.log(
+    JSON.stringify(
+      {
+        ...workerBudget,
+        effectiveShardCount: workerBudget.effectiveWorkers,
       },
       null,
       2,
@@ -14676,7 +14816,8 @@ function checkCommand(): void {
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const args = parseArgs(argv);
   const command = args._[0] ?? "review";
-  if (command === "plan") planCommand(args);
+  if (command === "plan") await planCommand(args);
+  else if (command === "budget") await budgetCommand(args);
   else if (command === "review") reviewCommand(args);
   else if (command === "apply-artifacts") applyArtifactsCommand(args);
   else if (command === "apply-decisions") await applyDecisionsCommand(args);

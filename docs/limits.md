@@ -37,6 +37,29 @@ The mental model:
 | `workers.minimum_background` | 1 | Target floor for background progress when enough global capacity is available. |
 | `lanes.assist.max` | 2 | Maximum concurrent lightweight assist jobs. |
 
+## Codex OAuth Budget
+
+When `CLAWSWEEPER_BUDGET_ENABLED=1`, review planning reads Codex OAuth usage through
+`codexbar` and applies weekly-first linear backoff plus configurable hooks before
+launching review shards. The global OAuth pool uses `budget.global_max_workers`
+(aligned with `workers.max`) minus `CLAWSWEEPER_ACTIVE_OAUTH_WORKERS`.
+
+| Name | Current | Meaning |
+| --- | ---: | --- |
+| `budget.global_max_workers` | 15 | Shared OAuth worker pool cap for all lanes. |
+| `budget.min_workers` | 0 | Minimum review shards budget planning may recommend. |
+| `budget.linear_backoff.start_used_percent` | 60 | Weekly usage where linear backoff begins. |
+| `budget.linear_backoff.stop_used_percent` | 95 | Weekly usage where linear backoff reaches its floor. |
+| `budget.pace.ahead_threshold_percent` | 5 | Pace delta treated as ahead-of-schedule burn. |
+| `budget.pace.behind_threshold_percent` | -5 | Pace delta treated as under-utilized capacity. |
+
+Dry-run:
+
+```bash
+CLAWSWEEPER_BUDGET_ENABLED=1 CLAWSWEEPER_CODEX_LOGIN_METHOD=chatgpt \
+  pnpm run budget -- --max-workers 10 --due-backlog 200 --batch-size 1
+```
+
 ## Derived Limits
 
 Derived limits are intentionally percentages of `workers.max`. With
@@ -124,6 +147,12 @@ commit review `4`, repair `36`, and hard caps `90`.
 
 ## Runtime Overrides
 
+- `CLAWSWEEPER_BUDGET_ENABLED` enables dynamic OAuth budget planning.
+- When enabled in GitHub Actions, the sweep plan job installs CodexBar CLI and
+  authenticates Codex before planning so `codexbar usage --source cli` can run.
+- `CLAWSWEEPER_BUDGET_FAIL_CLOSED=0` allows static fallback when `codexbar` is unavailable.
+- `CLAWSWEEPER_ACTIVE_OAUTH_WORKERS` subtracts already-active OAuth workers from the global pool.
+- `CLAWSWEEPER_CODEXBAR_BIN` overrides the `codexbar` executable path.
 - `CLAWSWEEPER_COMMIT_REVIEW_PAGE_SIZE` overrides
   `commit_review.page_size_default`.
 - `CLAWSWEEPER_MAX_LIVE_WORKERS` overrides the `job_intent`-derived repair

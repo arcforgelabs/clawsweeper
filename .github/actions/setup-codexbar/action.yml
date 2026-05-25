@@ -1,0 +1,50 @@
+name: Setup CodexBar CLI
+description: Install CodexBar CLI for OAuth budget probes during sweep planning.
+inputs:
+  version:
+    description: CodexBar release tag (for example v0.9.0) or latest.
+    default: "latest"
+runs:
+  using: composite
+  steps:
+    - name: Cache CodexBar CLI
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+      with:
+        path: ~/.clawsweeper-repair/codexbar
+        key: ${{ runner.os }}-codexbar-${{ inputs.version }}-v1
+        restore-keys: |
+          ${{ runner.os }}-codexbar-${{ inputs.version }}-
+          ${{ runner.os }}-codexbar-
+
+    - name: Install CodexBar CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        install_dir="$HOME/.clawsweeper-repair/codexbar"
+        mkdir -p "$install_dir"
+        echo "$install_dir" >> "$GITHUB_PATH"
+
+        if [ -x "$install_dir/codexbar" ]; then
+          "$install_dir/codexbar" usage --help >/dev/null
+          exit 0
+        fi
+
+        version="${{ inputs.version }}"
+        if [ "$version" = "latest" ]; then
+          asset_url="https://github.com/steipete/CodexBar/releases/latest/download/CodexBarCLI-linux-x86_64.tar.gz"
+        else
+          asset_url="https://github.com/steipete/CodexBar/releases/download/${version}/CodexBarCLI-linux-x86_64.tar.gz"
+        fi
+
+        tmp_dir="$(mktemp -d)"
+        trap 'rm -rf "$tmp_dir"' EXIT
+        curl -fsSL "$asset_url" -o "$tmp_dir/codexbar.tgz"
+        tar -xzf "$tmp_dir/codexbar.tgz" -C "$install_dir"
+        if [ -x "$install_dir/CodexBarCLI" ]; then
+          ln -sf "$install_dir/CodexBarCLI" "$install_dir/codexbar"
+        elif [ ! -x "$install_dir/codexbar" ]; then
+          echo "CodexBar CLI binary missing after extract" >&2
+          ls -la "$install_dir" >&2
+          exit 1
+        fi
+        "$install_dir/codexbar" usage --help >/dev/null

@@ -9,5 +9,104 @@
     "assist": {
       "max": 2
     }
+  },
+  "budget": {
+    "enabled": false,
+    "provider": "codexbar",
+    "fail_closed": true,
+    "oauth_only": true,
+    "global_max_workers": 15,
+    "min_workers": 0,
+    "primary_window": "weekly",
+    "linear_backoff": {
+      "enabled": true,
+      "window": "weekly",
+      "start_used_percent": 60,
+      "stop_used_percent": 95,
+      "min_worker_scale": 0.1
+    },
+    "pace": {
+      "ahead_threshold_percent": 5,
+      "behind_threshold_percent": -5,
+      "ahead_scale_per_point": 0.02,
+      "behind_release_per_point": 0.01
+    },
+    "hooks": [
+      {
+        "id": "weekly_stop",
+        "mode": "throttle",
+        "window": "weekly",
+        "used_percent_gte": 95,
+        "worker_scale": 0,
+        "max_workers": 1
+      },
+      {
+        "id": "weekly_throttle",
+        "mode": "throttle",
+        "window": "weekly",
+        "used_percent_gte": 85,
+        "worker_scale": 0.5
+      },
+      {
+        "id": "weekly_guard",
+        "mode": "throttle",
+        "window": "weekly",
+        "used_percent_gte": 70,
+        "worker_scale": 0.75
+      },
+      {
+        "id": "weekly_projected_stop",
+        "mode": "throttle",
+        "window": "weekly",
+        "projected_used_gte": 98,
+        "worker_scale": 0.25
+      },
+      {
+        "id": "weekly_release",
+        "mode": "release",
+        "window": "weekly",
+        "used_percent_lte": 50,
+        "pace_delta_lte": -5,
+        "worker_scale": 1,
+        "require_backlog": true
+      },
+      {
+        "id": "weekly_pace_release",
+        "mode": "release",
+        "window": "weekly",
+        "pace_delta_lte": -8,
+        "worker_scale": 1,
+        "require_backlog": true
+      },
+      {
+        "id": "session_stop",
+        "mode": "throttle",
+        "window": "session",
+        "used_percent_gte": 90,
+        "worker_scale": 0,
+        "max_workers": 1
+      },
+      {
+        "id": "session_throttle",
+        "mode": "throttle",
+        "window": "session",
+        "used_percent_gte": 80,
+        "worker_scale": 0.65
+      },
+      {
+        "id": "pace_ahead_weekly",
+        "mode": "throttle",
+        "window": "weekly",
+        "pace_delta_gte": 5,
+        "worker_scale": 0.5
+      },
+      {
+        "id": "pace_ahead_session",
+        "mode": "throttle",
+        "window": "session",
+        "pace_delta_gte": 5,
+        "worker_scale": 0.5
+      }
+    ]
   }
 }
