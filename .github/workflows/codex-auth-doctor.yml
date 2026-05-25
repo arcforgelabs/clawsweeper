@@ -1,0 +1,58 @@
+name: Codex Auth Doctor
+
+run-name: Codex OAuth doctor
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
+  CLAWSWEEPER_ALLOW_API_CODEX_AUTH: "0"
+
+concurrency:
+  group: codex-auth-doctor
+  cancel-in-progress: false
+
+jobs:
+  oauth:
+    name: Validate Codex OAuth
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            .github/actions/setup-codex
+          sparse-checkout-cone-mode: false
+
+      - name: Validate subscription auth
+        uses: ./.github/actions/setup-codex
+        env:
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
+          OPENAI_API_KEY: ""
+          CODEX_API_KEY: ""
+          PROXY_API_KEY: ""
+        with:
+          auth-mode: subscription
+          login-status: "true"
+
+      - name: Confirm OAuth-only mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${OPENAI_API_KEY:-}${CODEX_API_KEY:-}${PROXY_API_KEY:-}" ]]; then
+            echo "API-key auth variables are unexpectedly present in the OAuth doctor." >&2
+            exit 1
+          fi
+          status="$(codex login status)"
+          echo "$status"
+          if [[ "$status" != *"ChatGPT"* ]]; then
+            echo "Codex is authenticated, but not through ChatGPT OAuth/subscription auth." >&2
+            exit 1
+          fi
+          echo "Codex OAuth is valid for this workflow run."

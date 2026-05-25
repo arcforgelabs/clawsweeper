@@ -209,6 +209,11 @@ falling back to pay-as-you-go API billing. API-key auth remains available only
 after setting `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1` and choosing an API-backed
 `CLAWSWEEPER_CODEX_AUTH_MODE`.
 
+To refresh the stored OAuth material, run
+`scripts/refresh-codex-oauth.sh arcforgelabs/clawsweeper`. To validate without
+running a model call, start the `Codex Auth Doctor` workflow from GitHub Actions
+or run `gh workflow run codex-auth-doctor.yml --repo arcforgelabs/clawsweeper`.
+
 Codex runs in a read-only sandbox for classification and receives no GitHub token. GitHub read access is scoped to deterministic preflight scripts. For reviewed fix artifacts, `execute-fix-artifact` gives Codex a temporary target checkout without GitHub credentials, then the deterministic executor commits, pushes, opens the replacement PR, and closes uneditable source PRs only after the replacement exists. When a replacement carries contributor work forward, non-bot source PR authors are added as `Co-authored-by` trailers and named in the replacement PR body and source close comment. Remaining write access is scoped to `apply-result`.
 
 The repair worker wrapper emits a heartbeat while Codex is running. Execute-side

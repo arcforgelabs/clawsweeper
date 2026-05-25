@@ -69,9 +69,9 @@ Required secrets on `arcforgelabs/clawsweeper`:
 
 Arc Forge workflows default to **subscription** mode only:
 
-1. On a trusted machine, run `codex login` with your ChatGPT subscription account.
-2. Base64-encode `~/.codex/auth.json` without logging it: `base64 -w0 ~/.codex/auth.json`.
-3. Store the result as repo secret `CODEX_AUTH_JSON_B64`.
+1. On a trusted machine, run `scripts/refresh-codex-oauth.sh arcforgelabs/clawsweeper`.
+2. Complete `codex login` if the script opens the login flow.
+3. Confirm the triggered `Codex Auth Doctor` workflow passes.
 
 `setup-codex` writes the decoded file into an isolated per-run `CODEX_HOME/auth.json`.
 Arc Forge workflows do not pass `OPENAI_API_KEY` while
@@ -84,7 +84,9 @@ To enable it intentionally, set `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1`, set
 `CLAWSWEEPER_CODEX_AUTH_MODE` to `proxy` or `login`, and provide
 `OPENAI_API_KEY`.
 
-**Rotation:** subscription refresh tokens expire or rotate. When `codex login status` fails in Actions, refresh the local login and update `CODEX_AUTH_JSON_B64`.
+**Rotation:** subscription refresh tokens expire or rotate. When `codex login status` fails in Actions, run `scripts/refresh-codex-oauth.sh arcforgelabs/clawsweeper`. The script checks local ChatGPT OAuth, updates `CODEX_AUTH_JSON_B64`, and starts the no-spend `Codex Auth Doctor` workflow.
+
+**Manual health check:** run the `Codex Auth Doctor` workflow from the GitHub Actions tab. It validates only subscription OAuth and fails if API-key auth variables are present.
 
 **Long-term:** prefer a self-hosted runner with persistent `CODEX_HOME` OAuth instead of storing refresh material in GitHub secrets.
 
