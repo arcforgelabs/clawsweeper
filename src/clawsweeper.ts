@@ -6337,7 +6337,11 @@ function isReportNoneList(value: string): boolean {
 
 function isLinkableSourceRef(file: string): boolean {
   if (file.includes("/")) return true;
-  return ["AGENTS.md", "CHANGELOG.md", "README.md", "VISION.md"].includes(file);
+  return ["AGENTS.md", "CHANGELOG.md", "README.md", "INTENT.md", "VISION.md"].includes(file);
+}
+
+function isDirectionSourceRef(file: string): boolean {
+  return file === "INTENT.md" || file === "VISION.md";
 }
 
 function linkInlineSourceRefs(value: string, sha?: string | null): string {
@@ -6349,7 +6353,8 @@ function linkInlineSourceRefs(value: string, sha?: string | null): string {
       if (!isLinkableSourceRef(file)) return match;
       const docsUrl = docsPageUrl(file);
       const url =
-        docsUrl ?? (file === "VISION.md" && !line ? latestFileUrl(file) : fileUrl(file, sha, line));
+        docsUrl ??
+        (isDirectionSourceRef(file) && !line ? latestFileUrl(file) : fileUrl(file, sha, line));
       return markdownLink(`\`${ref}\``, url);
     },
   );
@@ -6361,11 +6366,17 @@ function linkPrimaryEvidenceFile(value: string, evidence: Evidence): string {
   if (docsUrl && !value.includes(docsUrl)) {
     return `${value} Public docs: ${markdownLink(`\`${evidence.file}\``, docsUrl)}.`;
   }
-  if (evidence.file !== "VISION.md" || value.includes("VISION.md")) return value;
-  const link = markdownLink("`VISION.md`", latestFileUrl(evidence.file));
+  if (!isDirectionSourceRef(evidence.file) || value.includes(evidence.file)) return value;
+  const label = `\`${evidence.file}\``;
+  const link = markdownLink(label, latestFileUrl(evidence.file));
   const linked = value
-    .replace(/\b(?:the project vision|project vision|the vision|VISION)\b/i, link)
+    .replace(
+      /\b(?:the project intent|project intent|the intent|INTENT|the project vision|project vision|the vision|VISION)\b/i,
+      link,
+    )
     .replace(/^Current main says\b/, `${link} says`)
+    .replace(/^The selected direction source says\b/, `${link} says`)
+    .replace(/^The direction source says\b/, `${link} says`)
     .replace(/^The roadmap guardrails explicitly list\b/, `${link} guardrails explicitly list`);
   return linked === value ? `${link}: ${value}` : linked;
 }

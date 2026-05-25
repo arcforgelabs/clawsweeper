@@ -100,15 +100,31 @@ outside OpenClaw core. Set `requiresNewFeature`, `requiresNewConfigOption`, and
 `requiresProductDecision` independently. Any true value means the item is not a
 strict bug-fix automation candidate even if useful.
 
-For issues, also do a VISION.md fit pass when the target checkout has
-`VISION.md`. Read it before selecting `visionFit`. Use `visionFit: "aligned"`
-only when the requested work fits current priorities or explicit next
-priorities and does not conflict with roadmap guardrails such as core staying
+For issues, also do an intent/vision fit pass using the target repository's
+direction source. Read `INTENT.md` first when present. If `INTENT.md` is absent,
+read `VISION.md`. If both exist, treat `INTENT.md` as the primary decision
+source and use `VISION.md` only as supporting historical or roadmap context
+where it does not conflict with `INTENT.md`. Keep using the existing
+`visionFit` and `visionFitEvidence` fields for this result so older reports and
+workflows remain compatible. Use `visionFit: "aligned"` only when the requested
+work fits current priorities or explicit next priorities in the selected
+direction source and does not conflict with guardrails such as core staying
 lean, plugins/ClawHub owning optional capability, or deferred work. Use
-`rejected` when VISION.md says the work should live elsewhere or not merge for
-now, `unclear` when VISION.md is missing or evidence is mixed, and
-`not_applicable` for pull requests and non-product cleanup. Put short concrete
-references in `visionFitEvidence`.
+`rejected` when the selected direction source says the work should live
+elsewhere or not merge for now, `unclear` when both direction files are missing
+or evidence is mixed, and `not_applicable` for pull requests and non-product
+cleanup. Put short concrete references to `INTENT.md` or `VISION.md` in
+`visionFitEvidence`.
+
+Do not set `requiresProductDecision: true` solely because an issue is a product,
+feature, cleanup, or priority choice when the selected direction source gives a
+clear direction. Treat 80-90% confidence alignment with `INTENT.md` or
+`VISION.md` as enough to choose a direction, mark `visionFit: "aligned"`, and
+queue a small PR when the normal work-candidate criteria are also satisfied.
+Still require a product decision when the issue conflicts with the selected
+direction source, changes pricing or commercial policy, touches security or
+authorization boundaries, requires broad architecture or migration choices, or
+has ambiguous large-scope tradeoffs.
 
 Estimate `implementationComplexity` for issues. Use `small` only when one
 focused autonomous PR can plausibly implement it with clear likely files and a
@@ -319,7 +335,7 @@ Use reason-specific anchors:
   Also confirm there has been no recent substantive human response that changes
   the decision. Keep the PR open when a meaningful unique fix, feature,
   security hardening, test, doc, migration, or product decision remains.
-- For `clawhub`, inspect `VISION.md` and the relevant plugin/skill/MCP/channel/provider docs or APIs, then confirm the request can be satisfied outside core without a missing extension API.
+- For `clawhub`, inspect the selected direction source (`INTENT.md` when present, otherwise `VISION.md`) and the relevant plugin/skill/MCP/channel/provider docs or APIs, then confirm the request can be satisfied outside core without a missing extension API.
 - For `duplicate_or_superseded`, read the canonical related report/PR from the provided context or `gh`, and explain whether it is open, closed, merged, or already shipped.
 - For `low_signal_unmergeable_pr`, inspect the PR title/body, diff, touched files, comments, current docs/code ownership, and any maintainer review notes. Confirm the submitted branch is mostly unrelated, copied, generated, bloated, or incoherent churn relative to the stated useful change, and that landing it would require discarding or replacing most of the branch. Keep open if the branch contains a meaningful unique fix, feature, migration, test, security hardening, or bounded repair path that can preserve most of the contributor work.
 - For `not_actionable_in_repo`, read enough discussion/context to confirm the action belongs to repo/project administration, third-party setup, external ownership, or historical cleanup rather than OpenClaw code/docs.
@@ -336,7 +352,7 @@ Close only when the evidence is strong and the repository policy allows it. Allo
 - `implemented_on_main`: current `main` already implements or fixes the request well enough.
 - `mostly_implemented_on_main`: an older PR is more than 60 days old, current `main` already implements the central useful part of the PR, and no meaningful unique remainder should be merged from the branch. Use only for pull requests, not issues. The close comment must say what part is already on `main`, what leftover part is minor/obsolete/superseded or separately tracked, and why keeping the stale branch open is not useful.
 - `cannot_reproduce`: you tried a reasonable reproduction path against current `main` and it does not reproduce, or the report is obsolete and no longer matches current behavior.
-- `clawhub`: useful idea, but it belongs as a ClawHub skill/plugin rather than OpenClaw core. Use `VISION.md` as the scope anchor. Prefer this when the requested capability is optional integration/provider/channel/skill/bundle/MCP work, can be built with current skill/MCP/plugin surfaces, has no concrete missing core extension API, and has no protected maintainer signal. This includes service-specific channels, providers, optional skills, and plugin-discovery/publishing ideas when the current plugin or bundle-style interface is sufficient. For OpenClaw PRs that only add bundled skills under paths like `skills/<vendor>/**`, set `itemCategory: "skill"` and prefer `closeReason: "clawhub"` with high confidence; the close comment should ask the contributor to upload or publish it through ClawHub.com instead of bundling it in OpenClaw core. Keep open when the item reports a regression in bundled core behavior, identifies a missing plugin API needed before external implementation is possible, involves security/core hardening, or clearly needs explicit maintainer product judgment.
+- `clawhub`: useful idea, but it belongs as a ClawHub skill/plugin rather than OpenClaw core. Use the selected direction source (`INTENT.md` when present, otherwise `VISION.md`) as the scope anchor. Prefer this when the requested capability is optional integration/provider/channel/skill/bundle/MCP work, can be built with current skill/MCP/plugin surfaces, has no concrete missing core extension API, and has no protected maintainer signal. This includes service-specific channels, providers, optional skills, and plugin-discovery/publishing ideas when the current plugin or bundle-style interface is sufficient. For OpenClaw PRs that only add bundled skills under paths like `skills/<vendor>/**`, set `itemCategory: "skill"` and prefer `closeReason: "clawhub"` with high confidence; the close comment should ask the contributor to upload or publish it through ClawHub.com instead of bundling it in OpenClaw core. Keep open when the item reports a regression in bundled core behavior, identifies a missing plugin API needed before external implementation is possible, involves security/core hardening, or clearly needs explicit maintainer product judgment.
 - `duplicate_or_superseded`: another issue/PR already tracks the same remaining work, or the linked discussion/PR clearly supersedes this item. Link the canonical item and explain whether it is open or closed/merged. For clusters with the same root cause, keep one canonical issue open and close satellites when their unique logs, platforms, or context can be preserved by linking them in the close comment. Unique evidence blocks duplicate close only when it implies a distinct root cause, platform-specific fix, or separate remaining product behavior.
 - `low_signal_unmergeable_pr`: a pull request may contain a small useful idea, but the submitted branch is net-negative and should not stay open as a landing candidate because most of the diff is unrelated, copied, generated, bloated, internally incoherent, or conflicts with the repository's existing structure. Use this for PRs like a narrow docs title that inserts a large unrelated reference block, a tiny bug fix mixed with broad unrelated rewrites, or generated/vendor/config churn unrelated to the stated purpose. The close comment must acknowledge any useful part, explain the concrete unmergeable diff, and invite a new narrow PR for the useful change. Do not use this when the PR has meaningful unique work that can be repaired without throwing away most of the branch, when maintainers asked to preserve/adopt the branch, when a protected label or maintainer author requires human judgment, or when the only issue is ordinary missing proof, test coverage, style, or review follow-up.
 - `not_actionable_in_repo`: the request is concrete enough to understand, but the action belongs outside the OpenClaw source repository, such as GitHub/project administration, external hosted setup, third-party service configuration, domain/account ownership, or historical comment/issue cleanup that cannot be fixed by changing OpenClaw code or docs. Do not use this for real product bugs, plugin API gaps, or unclear-but-salvageable reports. Use this for setup/support reports, one-line reports, screenshot-only reports, or credential-redaction incidents only when current code/docs show the behavior is expected or externally configured and the item lacks a concrete source-level reproduction. Do not keep these open only to collect support logs; the close comment should ask for credential rotation/redaction when relevant and point to the exact diagnostic command or docs page needed for a new actionable report.

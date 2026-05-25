@@ -99,12 +99,14 @@ issues that are exactly:
 - `work_confidence: high`
 - no security/protected signal
 - no product-decision blocker
-- complete repair prompt, likely files, validation commands, and VISION.md
-  evidence
+- complete repair prompt, likely files, validation commands, and direction-source
+  evidence from `INTENT.md` when present, otherwise `VISION.md`
 
-This lane allows small feature/docs/cleanup work when it fits `VISION.md`, but
-still stops before broad product or architecture work. Medium-or-larger aligned
-items remain manual work-lane candidates.
+This lane allows small feature/docs/cleanup work when it fits the repository's
+direction source. `INTENT.md` is primary when present; `VISION.md` is the
+backward-compatible fallback. It still stops before broad product or
+architecture work. Medium-or-larger aligned items remain manual work-lane
+candidates.
 
 After review publish, `sweep.yml` scans the just-produced artifacts and dispatches
 `repair-issue-implementation-intake.yml` for eligible reports when the matching

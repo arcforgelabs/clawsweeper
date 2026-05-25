@@ -6,7 +6,7 @@
       "display_name": "Arc Forge Console",
       "checkout_dir": "arc-forge-console",
       "docs_url": "https://docs.arcforge.au",
-      "prompt_note": "Use the arc-forge-console source tree and current main branch. Review console, auth, billing, and customer-facing workflow changes conservatively during bootstrap. Keep issues and pull requests open unless certainly implemented on main.",
+      "prompt_note": "Use the arc-forge-console source tree and current main branch. Use INTENT.md as the primary maintainer decision source when present, with VISION.md only as fallback/supporting context. When INTENT.md gives a clear direction, prefer intent-aligned vision_fit routing and queueable small fixes over product-decision blockers. Keep product-decision blockers for explicit intent conflicts, pricing/commercial policy, security boundaries, or broad architecture/migration choices. Review console, auth, billing, and customer-facing workflow changes conservatively during bootstrap. Keep issues and pull requests open unless certainly implemented on main.",
       "apply_close_rules": {
         "issue": ["implemented_on_main", "duplicate_or_superseded"],
         "pull_request": ["implemented_on_main"]

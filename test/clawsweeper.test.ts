@@ -9857,6 +9857,17 @@ test("review prompts read target AGENTS instructions before reviewing", () => {
   }
 });
 
+test("review prompt prefers INTENT.md before VISION.md for direction decisions", () => {
+  const prompt = readFileSync("prompts/review-item.md", "utf8");
+
+  assert.match(prompt, /Read `INTENT\.md` first when present/);
+  assert.match(prompt, /If `INTENT\.md` is absent,\s+read `VISION\.md`/);
+  assert.match(prompt, /treat `INTENT\.md` as the primary decision\s+source/);
+  assert.match(prompt, /Keep using the existing\s+`visionFit` and `visionFitEvidence` fields/);
+  assert.match(prompt, /Do not set `requiresProductDecision: true` solely because/);
+  assert.match(prompt, /Treat 80-90% confidence alignment with `INTENT\.md` or\s+`VISION\.md`/);
+});
+
 test("review prompt requires a dedicated securityReview section", () => {
   const prompt = readFileSync("prompts/review-item.md", "utf8");
 
