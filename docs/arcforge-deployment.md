@@ -132,7 +132,7 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 ## Verification checklist
 
 1. **CI** — `pnpm run check` passes on `arcforgelabs/clawsweeper` `main`.
-2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, `batch_size=1`, `shard_count=1`, and optionally one `item_number`.
+2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, `batch_size=1`, `shard_count=1` (explicit override for bootstrap), and optionally one `item_number`.
 3. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
 4. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
 5. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.

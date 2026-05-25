@@ -22,7 +22,7 @@ ClawSweeper has three issue/PR scheduler paths:
 
 The lanes share report storage and apply rules, but they intentionally do not
 share throughput. Event review and hot intake keep new maintainer-visible work
-fast. Normal backfill keeps older records moving with up to 1 concurrent Codex
+fast. Normal backfill keeps older records moving with up to 2 concurrent Codex
 review shards when the system is quiet. Normal `openclaw/openclaw` review has an
 active floor of 1 shards for scheduled runs and workflow-dispatch
 continuations: due items win first, and if fewer than 1 items are due, the
