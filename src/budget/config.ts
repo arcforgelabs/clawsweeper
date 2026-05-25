@@ -56,16 +56,28 @@ export function resolveBudgetConfig(
   options: BudgetRuntimeOptions = {},
 ): BudgetConfig {
   const env = options.env ?? process.env;
-  const enabled =
-    env.CLAWSWEEPER_BUDGET_ENABLED === "1" ||
-    env.CLAWSWEEPER_BUDGET_ENABLED === "true" ||
-    config.enabled;
+  const enabled = resolveBudgetEnabledFromEnv(config, env);
   const failClosed = env.CLAWSWEEPER_BUDGET_FAIL_CLOSED === "0" ? false : config.failClosed;
   return {
     ...config,
     enabled,
     failClosed,
   };
+}
+
+function resolveBudgetEnabledFromEnv(config: BudgetConfig, env: NodeJS.ProcessEnv): boolean {
+  const raw = env.CLAWSWEEPER_BUDGET_ENABLED;
+  if (typeof raw !== "string" || !raw.trim()) {
+    return config.enabled;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "0" || normalized === "false") {
+    return false;
+  }
+  if (normalized === "1" || normalized === "true") {
+    return true;
+  }
+  return config.enabled;
 }
 
 export function resolveActiveOAuthWorkers(options: BudgetRuntimeOptions = {}): number {

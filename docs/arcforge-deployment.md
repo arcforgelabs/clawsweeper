@@ -56,7 +56,7 @@ Repository variables on `arcforgelabs/clawsweeper`:
 | Variable | Bootstrap value | Purpose |
 |----------|-----------------|--------|
 | `CLAWSWEEPER_ALLOW_API_CODEX_AUTH` | unset / `0` | Keep API-key Codex auth disabled for Arc Forge bootstrap |
-| `CLAWSWEEPER_BUDGET_ENABLED` | `1` | Require CodexBar OAuth budget planning for review fanout |
+| `CLAWSWEEPER_BUDGET_ENABLED` | `1` | Require CodexBar OAuth budget planning for review fanout; set `0` to bypass budget hooks during manual verification even though `automation-limits.json` keeps budget enabled |
 | `CLAWSWEEPER_CODEX_AUTH_MODE` | unset / `subscription` | Future opt-in auth mode; ignored unless `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1` |
 | `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |

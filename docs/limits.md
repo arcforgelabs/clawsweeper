@@ -39,7 +39,7 @@ The mental model:
 
 ## Codex OAuth Budget
 
-When `CLAWSWEEPER_BUDGET_ENABLED=1`, review planning reads Codex OAuth usage through
+When budget is enabled, review planning reads Codex OAuth usage through
 `codexbar` and applies weekly-first linear backoff plus configurable hooks before
 launching review shards. The global OAuth pool uses `budget.global_max_workers`
 (aligned with `workers.max`) minus `CLAWSWEEPER_ACTIVE_OAUTH_WORKERS`.
@@ -147,7 +147,9 @@ commit review `4`, repair `36`, and hard caps `90`.
 
 ## Runtime Overrides
 
-- `CLAWSWEEPER_BUDGET_ENABLED` enables dynamic OAuth budget planning.
+- `CLAWSWEEPER_BUDGET_ENABLED=1` or `true` enables dynamic OAuth budget planning.
+  `0` or `false` disables it even when `config/automation-limits.json` has
+  `budget.enabled: true` (used for operator verification runs).
 - When enabled in GitHub Actions, the sweep plan job installs CodexBar CLI and
   authenticates Codex before planning so `codexbar usage --source cli` can run.
 - `CLAWSWEEPER_BUDGET_FAIL_CLOSED=0` allows static fallback when `codexbar` is unavailable.

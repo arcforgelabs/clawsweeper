@@ -331,6 +331,30 @@ test("resolveBudgetConfig honors CLAWSWEEPER_BUDGET_ENABLED and active worker en
   assert.equal(resolveActiveOAuthWorkers({ env: { CLAWSWEEPER_ACTIVE_OAUTH_WORKERS: "4" } }), 4);
 });
 
+test("resolveBudgetConfig disables budget when CLAWSWEEPER_BUDGET_ENABLED=0 overrides config", () => {
+  const config = resolveBudgetConfig(readBudgetConfig(), {
+    env: { CLAWSWEEPER_BUDGET_ENABLED: "0" },
+  });
+  assert.equal(config.enabled, false);
+});
+
+test("resolveWorkerBudget skips provider when CLAWSWEEPER_BUDGET_ENABLED=0 overrides config", async () => {
+  const resolved = await resolveWorkerBudget({
+    configuredMaxWorkers: 10,
+    config: readBudgetConfig(),
+    runtime: { codexLoginMethod: "chatgpt", env: { CLAWSWEEPER_BUDGET_ENABLED: "0" } },
+    provider: {
+      name: "codexbar",
+      fetchSnapshot: async () => {
+        throw new Error("codexbar should not be called");
+      },
+    },
+  });
+  assert.equal(resolved.enabled, false);
+  assert.equal(resolved.effectiveWorkers, 10);
+  assert.equal(resolved.decision.reason, "disabled");
+});
+
 test("workerBudgetReasonLabel maps reasons for run summaries", () => {
   assert.equal(workerBudgetReasonLabel("linear_backoff"), "linear backoff");
   assert.equal(workerBudgetReasonLabel("released"), "constraints released");
