@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo="${1:-arcforgelabs/clawsweeper}"
+default_repo="arcforgelabs/clawsweeper"
+repo="${1:-$default_repo}"
 auth_json="${CODEX_AUTH_JSON:-$HOME/.codex/auth.json}"
 workflow="${CLAWSWEEPER_CODEX_AUTH_DOCTOR_WORKFLOW:-codex-auth-doctor.yml}"
 
@@ -13,7 +14,7 @@ Refresh CODEX_AUTH_JSON_B64 from a local Codex ChatGPT OAuth login, then start
 the Codex Auth Doctor workflow.
 
 Defaults:
-  owner/repo: $repo
+  owner/repo: $default_repo
   auth file:  $auth_json
 
 Environment:
