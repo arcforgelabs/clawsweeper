@@ -49,7 +49,7 @@ Repository variables on `arcforgelabs/clawsweeper`:
 | Variable | Bootstrap value | Purpose |
 |----------|-----------------|--------|
 | `CLAWSWEEPER_CODEX_AUTH_MODE` | `subscription` | Use ChatGPT/Codex subscription auth instead of pay-as-you-go API key |
-| `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Keep `sweep.yml` cron disabled until first manual verification succeeds |
+| `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |
 | `CLAWSWEEPER_ENABLE_CLAWHUB` | unset | N/A for Arc Forge |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS` | unset / `0` | No issue implementation PRs |
@@ -136,7 +136,7 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 3. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
 4. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
 5. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.
-6. **Schedules** — only after steps 2–5 succeed, restore `sweep.yml` cron entries and set `CLAWSWEEPER_ENABLE_SCHEDULES=1`.
+6. **Schedules** — only after steps 2–5 succeed, set `CLAWSWEEPER_ENABLE_SCHEDULES=1` so gated scheduled jobs start running.
 
 ## Rollout order (recommended)
 

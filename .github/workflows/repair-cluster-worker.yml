@@ -61,7 +61,6 @@ jobs:
       allow_merge: ${{ steps.capture_gates.outputs.allow_merge }}
       job_exists: ${{ steps.check_job.outputs.job_exists }}
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CLAWSWEEPER_ALLOWED_OWNER: ${{ vars.CLAWSWEEPER_ALLOWED_OWNER || 'openclaw' }}
       CLAWSWEEPER_ALLOW_EXECUTE: ${{ (inputs.mode == 'execute' || inputs.mode == 'autonomous') && vars.CLAWSWEEPER_ALLOW_EXECUTE == '1' && '1' || '0' }}
       CLAWSWEEPER_ALLOW_FIX_PR: ${{ (inputs.mode == 'execute' || inputs.mode == 'autonomous') && vars.CLAWSWEEPER_ALLOW_FIX_PR == '1' && '1' || '0' }}
@@ -242,7 +241,6 @@ jobs:
     runs-on: ${{ inputs.execution_runner }}
     timeout-minutes: 45
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       CLAWSWEEPER_ALLOWED_OWNER: ${{ vars.CLAWSWEEPER_ALLOWED_OWNER || 'openclaw' }}
       CLAWSWEEPER_ALLOW_EXECUTE: ${{ needs.cluster.outputs.allow_execute == '1' && '1' || '0' }}
       CLAWSWEEPER_ALLOW_FIX_PR: ${{ needs.cluster.outputs.allow_fix_pr == '1' && '1' || '0' }}

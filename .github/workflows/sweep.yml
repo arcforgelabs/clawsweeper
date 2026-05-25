@@ -107,25 +107,25 @@ on:
         description: "Refresh audit state without running review or apply work"
         required: false
         default: "false"
-  # Arc Forge bootstrap: keep schedules disabled until the first manual verification
-  # sweep succeeds and CLAWSWEEPER_ENABLE_SCHEDULES=1 is set on the repo.
-  # schedule:
-  #   - cron: "*/5 * * * *"
-  #   - cron: "2/5 * * * *"
-  #   - cron: "7 */6 * * *"
-  #   - cron: "12 */6 * * *"
-  #   - cron: "17 */6 * * *"
-  #   - cron: "1/5 * * * *"
-  #   - cron: "22 * * * *"
-  #   - cron: "3 * * * *"
-  #   - cron: "18 * * * *"
-  #   - cron: "33 * * * *"
-  #   - cron: "48 * * * *"
-  #   - cron: "8,23,38,53 * * * *"
-  #   - cron: "6,21,36,51 * * * *"
-  #   - cron: "4/15 * * * *"
-  #   - cron: "41 * * * *"
-  #   - cron: "37 */6 * * *"
+  # Arc Forge bootstrap: scheduled jobs stay registered but gated on
+  # CLAWSWEEPER_ENABLE_SCHEDULES=1 until the first manual verification succeeds.
+  schedule:
+    - cron: "*/5 * * * *"
+    - cron: "2/5 * * * *"
+    - cron: "7 */6 * * *"
+    - cron: "12 */6 * * *"
+    - cron: "17 */6 * * *"
+    - cron: "1/5 * * * *"
+    - cron: "22 * * * *"
+    - cron: "3 * * * *"
+    - cron: "18 * * * *"
+    - cron: "33 * * * *"
+    - cron: "48 * * * *"
+    - cron: "8,23,38,53 * * * *"
+    - cron: "6,21,36,51 * * * *"
+    - cron: "4/15 * * * *"
+    - cron: "41 * * * *"
+    - cron: "37 */6 * * *"
 
 permissions:
   contents: write
@@ -564,7 +564,7 @@ jobs:
 
   target-fanout:
     name: Fan out target repository sweeps
-    if: ${{ github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *') }}
+    if: ${{ github.event_name == 'schedule' && vars.CLAWSWEEPER_ENABLE_SCHEDULES == '1' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -634,7 +634,7 @@ jobs:
 
   plan:
     name: Plan review candidates
-    if: ${{ (github.event_name != 'repository_dispatch' || github.event.action == 'clawsweeper_target_sweep') && !((github.event_name == 'workflow_dispatch' && (github.event.inputs.apply_existing == 'true' || github.event.inputs.audit_dashboard == 'true')) || (github.event_name == 'schedule' && ((github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '6,21,36,51 * * * *') || (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *') || (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')))) && !(github.event_name == 'schedule' && (github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *') && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') && !(github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') }}
+    if: ${{ (github.event_name != 'repository_dispatch' || github.event.action == 'clawsweeper_target_sweep') && !((github.event_name == 'workflow_dispatch' && (github.event.inputs.apply_existing == 'true' || github.event.inputs.audit_dashboard == 'true')) || (github.event_name == 'schedule' && ((github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '6,21,36,51 * * * *') || (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *') || (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')))) && !(github.event_name == 'schedule' && (github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *') && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') && !(github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') && (github.event_name != 'schedule' || vars.CLAWSWEEPER_ENABLE_SCHEDULES == '1') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -1642,7 +1642,7 @@ jobs:
 
   audit-dashboard:
     name: Audit state
-    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *')) }}
+    if: ${{ ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && vars.CLAWSWEEPER_ENABLE_SCHEDULES == '1' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -1761,7 +1761,7 @@ jobs:
 
   apply-existing:
     name: Apply close proposals
-    if: ${{ ((github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_hatch') || (github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '6,21,36,51 * * * *'))) && !(github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') && !(github.event_name == 'schedule' && github.event.schedule == '8,23,38,53 * * * *' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') }}
+    if: ${{ ((github.event_name == 'repository_dispatch' && github.event.action == 'clawsweeper_hatch') || (github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && vars.CLAWSWEEPER_ENABLE_SCHEDULES == '1' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '6,21,36,51 * * * *'))) && !(github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') && !(github.event_name == 'schedule' && github.event.schedule == '8,23,38,53 * * * *' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:

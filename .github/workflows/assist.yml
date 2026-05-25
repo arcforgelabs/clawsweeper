@@ -117,8 +117,6 @@ jobs:
     if: ${{ needs.capacity.outputs.proceed == 'true' }}
     runs-on: ${{ vars.CLAWSWEEPER_WORKER_RUNNER || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 8
-    env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
