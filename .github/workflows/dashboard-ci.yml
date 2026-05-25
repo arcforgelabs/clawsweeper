@@ -31,7 +31,7 @@ jobs:
       CLAWSWEEPER_STATUS_CI_LIMIT: "30"
       GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 1

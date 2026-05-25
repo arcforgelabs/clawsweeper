@@ -38,7 +38,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+  CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
   CLOUDFLARE_ACCOUNT_ID: 91b59577e757131d68d55a471fe32aca
   REPORTS_DOMAIN: reports.openclaw.ai
   REPORTS_PROJECT: openclaw-maintainer-reports
@@ -59,7 +59,7 @@ jobs:
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          owner: openclaw
+          owner: ${{ github.repository_owner }}
           repositories: maintainers
           permission-contents: write
 
@@ -69,13 +69,13 @@ jobs:
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          owner: openclaw
+          owner: ${{ github.repository_owner }}
           permission-contents: read
           permission-issues: read
           permission-pull-requests: read
 
       - name: Check out maintainers
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           repository: openclaw/maintainers
           path: maintainers
@@ -83,7 +83,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
 

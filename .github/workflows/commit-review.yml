@@ -1,6 +1,6 @@
 name: ClawSweeper Commit Review
 
-run-name: Commit review ${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'openclaw/openclaw' }}@${{ github.event.inputs.commit_sha || github.event.client_payload.after_sha || github.event.client_payload.commit_sha || '?' }}
+run-name: Commit review ${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console' }}@${{ github.event.inputs.commit_sha || github.event.client_payload.after_sha || github.event.client_payload.commit_sha || '?' }}
 
 on:
   repository_dispatch:
@@ -14,7 +14,7 @@ on:
       target_repo:
         description: "Repository containing the main commit"
         required: false
-        default: "openclaw/openclaw"
+        default: "arcforgelabs/arc-forge-console"
       commit_sha:
         description: "Specific commit SHA to review"
         required: true
@@ -41,27 +41,27 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+  CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
 
 concurrency:
-  group: commit-review-${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'openclaw/openclaw' }}-${{ github.event.inputs.commit_sha || github.event.client_payload.after_sha || github.event.client_payload.commit_sha || github.run_id }}
+  group: commit-review-${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console' }}-${{ github.event.inputs.commit_sha || github.event.client_payload.after_sha || github.event.client_payload.commit_sha || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   disabled-target:
     name: Skip disabled target commit review
-    if: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1' }}
+    if: ${{ false }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Explain skipped commit review
         run: |
           echo "Skipping commit review for ${{ github.event.client_payload.target_repo }}."
-          echo "Set CLAWSWEEPER_ENABLE_CLAWHUB=1 after installing the ClawSweeper GitHub App on openclaw/clawhub."
+          echo "This disabled-target compatibility job is inactive for Arc Forge bootstrap."
 
   plan:
     name: Plan commits
-    if: ${{ !(github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo == 'openclaw/clawhub' && vars.CLAWSWEEPER_ENABLE_CLAWHUB != '1') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'repository_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
@@ -77,7 +77,7 @@ jobs:
       target_repo_name: ${{ steps.target.outputs.target_repo_name }}
       target_repo_owner: ${{ steps.target.outputs.target_repo_owner }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: clawsweeper
           filter: blob:none
@@ -106,7 +106,7 @@ jobs:
       - name: Resolve target repository
         id: target
         run: |
-          target_repo="${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'openclaw/openclaw' }}"
+          target_repo="${{ github.event.inputs.target_repo || github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console' }}"
           if ! printf '%s' "$target_repo" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; then
             echo "Invalid target_repo: $target_repo" >&2
             exit 1
@@ -314,7 +314,7 @@ jobs:
           echo "Selected $selected_count/$total_count commits at offset $COMMIT_OFFSET"
           printf 'Selected commits:\n%s\n' "$selected_commits"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: skipped-commit-reports
@@ -334,7 +334,7 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           path: clawsweeper
           filter: blob:none
@@ -375,7 +375,9 @@ jobs:
       - uses: ./clawsweeper/.github/actions/setup-codex
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
+          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
           login-status: "true"
 
       - name: Check out target main
@@ -452,7 +454,7 @@ jobs:
             --report-relative-path "$relative_path" \
             --report-repo "${{ github.repository }}"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: commit-review-${{ matrix.sha }}
@@ -466,7 +468,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           filter: blob:none
           fetch-depth: 0
@@ -486,14 +488,14 @@ jobs:
         with:
           build-script: build:all
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         if: ${{ needs.plan.outputs.planned_count != '0' }}
         with:
           pattern: commit-review-*
           path: commit-artifacts
           merge-multiple: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         if: ${{ needs.plan.outputs.skipped_count != '0' }}
         with:
           name: skipped-commit-reports
@@ -516,7 +518,7 @@ jobs:
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
           private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
-          owner: openclaw
+          owner: ${{ github.repository_owner }}
           repositories: clawsweeper
           permission-actions: write
           permission-contents: write
@@ -530,7 +532,7 @@ jobs:
           set -euo pipefail
           node dist/commit-sweeper.js dispatch-findings \
             --artifact-dir commit-artifacts \
-            --repair-repo openclaw/clawsweeper \
+            --repair-repo arcforgelabs/clawsweeper \
             --repair-workflow repair-commit-finding-intake.yml \
             --dispatch-mode workflow_dispatch \
             --report-repo "${{ github.repository }}" \

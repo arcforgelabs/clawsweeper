@@ -40,16 +40,19 @@ Goal: review selected repos, write durable state, sync maintainer-facing comment
 
 Configured policy in `config/target-repositories.json`:
 
-- Primary target: `arcforgelabs/arc-forge-console`
-- Self-review: `arcforgelabs/clawsweeper`
+- Primary targets: `arcforgelabs/arc-forge-console`, `arcforgelabs/clawsweeper`
 - Generic `arcforgelabs/*` fallback: review-only (`apply_close_rules` empty for issues and PRs)
+- Generic `IAMSamuelRodda/*` fallback: review-only, available for manual/event use once the App is installed there
+- OpenClaw repository profiles remain for upstream compatibility and apply/reconcile paths, but `target_inventory.owners` is `["arcforgelabs"]` only so scheduled fanout does not sweep OpenClaw repos during bootstrap
+- `IAMSamuelRodda` is intentionally not in `target_inventory.owners`; add it later to make scheduled fanout include those repos
 
 Repository variables on `arcforgelabs/clawsweeper`:
 
 | Variable | Bootstrap value | Purpose |
 |----------|-----------------|--------|
+| `CLAWSWEEPER_CODEX_AUTH_MODE` | `subscription` | Use ChatGPT/Codex subscription auth instead of pay-as-you-go API key |
+| `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |
-| `CLAWSWEEPER_ENABLE_CLAWHUB` | unset | N/A for Arc Forge |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS` | unset / `0` | No issue implementation PRs |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_VISION_FIT` | unset / `0` | No vision-fit PRs |
 
@@ -57,9 +60,32 @@ Required secrets on `arcforgelabs/clawsweeper`:
 
 | Secret | Purpose |
 |--------|---------|
-| `OPENAI_API_KEY` | Codex review proxy |
+| `CODEX_AUTH_JSON_B64` | Base64-encoded `auth.json` from a Codex subscription login (`auth_mode: chatgpt`) |
 | `CLAWSWEEPER_APP_CLIENT_ID` | Arc Forge GitHub App client ID |
 | `CLAWSWEEPER_APP_PRIVATE_KEY` | Arc Forge GitHub App private key PEM |
+
+Optional fallback secrets:
+
+| Secret | Purpose |
+|--------|---------|
+| `OPENAI_API_KEY` | Only when `CLAWSWEEPER_CODEX_AUTH_MODE=proxy` or `login` |
+
+### Codex auth modes
+
+Default bootstrap mode is **subscription**:
+
+1. On a trusted machine, run `codex login` with your ChatGPT subscription account.
+2. Base64-encode `~/.codex/auth.json` without logging it: `base64 -w0 ~/.codex/auth.json`.
+3. Store the result as repo secret `CODEX_AUTH_JSON_B64`.
+4. Set repo variable `CLAWSWEEPER_CODEX_AUTH_MODE=subscription`.
+
+`setup-codex` writes the decoded file into an isolated per-run `CODEX_HOME/auth.json`. Codex subprocesses never receive `OPENAI_API_KEY` in subscription mode.
+
+**Rotation:** subscription refresh tokens expire or rotate. When `codex login status` fails in Actions, refresh the local login and update `CODEX_AUTH_JSON_B64`.
+
+**Long-term:** prefer a self-hosted runner with persistent `CODEX_HOME` OAuth instead of storing refresh material in GitHub secrets.
+
+**API key fallback:** set `CLAWSWEEPER_CODEX_AUTH_MODE=proxy`, provide `OPENAI_API_KEY`, and accept pay-as-you-go token billing.
 
 Optional later:
 
@@ -107,11 +133,11 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 ## Verification checklist
 
 1. **CI** — `pnpm run check` passes on `arcforgelabs/clawsweeper` `main`.
-2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, one `item_number` if available.
-3. **Scheduled review** — confirm the hourly/daily cron picks up open items after secrets are configured.
-4. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
-5. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
-6. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.
+2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, `batch_size=1`, `shard_count=1` (explicit override for bootstrap), and optionally one `item_number`.
+3. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
+4. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
+5. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.
+6. **Schedules** — only after steps 2–5 succeed, set `CLAWSWEEPER_ENABLE_SCHEDULES=1` so gated scheduled jobs start running.
 
 ## Rollout order (recommended)
 
