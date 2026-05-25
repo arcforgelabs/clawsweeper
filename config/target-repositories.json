@@ -8,8 +8,8 @@
       "docs_url": "https://docs.arcforge.au",
       "prompt_note": "Use the arc-forge-console source tree and current main branch. Review console, auth, billing, and customer-facing workflow changes conservatively during bootstrap. Keep issues and pull requests open unless certainly implemented on main.",
       "apply_close_rules": {
-        "issue": [],
-        "pull_request": []
+        "issue": ["implemented_on_main", "duplicate_or_superseded"],
+        "pull_request": ["implemented_on_main"]
       }
     },
     {

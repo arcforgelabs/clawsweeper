@@ -36,11 +36,16 @@ Do not full-clone the entire repo history unless you are debugging the state rep
 
 ## Phase 1 bootstrap (conservative)
 
-Goal: review selected repos, write durable state, sync maintainer-facing comments, and **not** auto-close, autofix, or automerge.
+Goal: review selected repos, write durable state, sync maintainer-facing comments,
+and apply only narrow already-resolved close proposals on `arc-forge-console`.
+Autofix and automerge remain explicit opt-ins.
 
 Configured policy in `config/target-repositories.json`:
 
 - Primary targets: `arcforgelabs/arc-forge-console`, `arcforgelabs/clawsweeper`
+- `arcforgelabs/arc-forge-console`: auto-close issues only for
+  `implemented_on_main` or `duplicate_or_superseded`; auto-close PRs only for
+  `implemented_on_main`
 - Generic `arcforgelabs/*` fallback: review-only (`apply_close_rules` empty for issues and PRs)
 - Generic `IAMSamuelRodda/*` fallback: review-only, available for manual/event use once the App is installed there
 - OpenClaw repository profiles remain for upstream compatibility and apply/reconcile paths, but `target_inventory.owners` is `["arcforgelabs"]` only so scheduled fanout does not sweep OpenClaw repos during bootstrap
@@ -51,6 +56,7 @@ Repository variables on `arcforgelabs/clawsweeper`:
 | Variable | Bootstrap value | Purpose |
 |----------|-----------------|--------|
 | `CLAWSWEEPER_ALLOW_API_CODEX_AUTH` | unset / `0` | Keep API-key Codex auth disabled for Arc Forge bootstrap |
+| `CLAWSWEEPER_BUDGET_ENABLED` | `1` | Require CodexBar OAuth budget planning for review fanout |
 | `CLAWSWEEPER_CODEX_AUTH_MODE` | unset / `subscription` | Future opt-in auth mode; ignored unless `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1` |
 | `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |
@@ -139,7 +145,9 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 2. **Manual review** — workflow dispatch `ClawSweeper` with `target_repo=arcforgelabs/arc-forge-console`, `apply_existing=false`, `batch_size=1`, `shard_count=1` (explicit override for bootstrap), and optionally one `item_number`.
 3. **Event review** — open or edit an issue/PR in `arc-forge-console`; confirm dispatcher run and receiver run in `clawsweeper` Actions.
 4. **State publish** — confirm `arcforgelabs/clawsweeper-state` branch `state` receives `records/`, `jobs/`, `results/`, and dashboard status JSON.
-5. **Comments** — confirm one marker-backed review comment per reviewed item; no issue/PR closes during bootstrap.
+5. **Comments and closes** — confirm one marker-backed review comment per reviewed
+   item. `arc-forge-console` may close only configured safe proposals; other
+   Arc Forge targets remain review-only unless given explicit rules.
 6. **Schedules** — only after steps 2–5 succeed, set `CLAWSWEEPER_ENABLE_SCHEDULES=1` so gated scheduled jobs start running.
 
 ## Rollout order (recommended)
@@ -147,7 +155,7 @@ Target repos also need the org/repo secret `CLAWSWEEPER_APP_PRIVATE_KEY`.
 1. ClawSweeper dry-run / review-only on `arc-forge-console`
 2. State publishing + dashboard on `clawsweeper-state`
 3. Enable public comments on selected repos (already on in bootstrap once App write perms exist)
-4. Add guarded close/fix workflows repo-by-repo after trust is established
+4. Add guarded fix and automerge workflows repo-by-repo after trust is established
 5. Docs mirror for console (see `arc-forge-infrastructure/docs/CONSOLE-DOCS-PUBLISHING.md`)
 6. Ask-Molty variant tracked as a console enhancement issue
 
