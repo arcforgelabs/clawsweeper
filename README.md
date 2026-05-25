@@ -544,9 +544,9 @@ is active. Throughput defaults live in
 ClawSweeper has one main capacity knob:
 `config/automation-limits.json` -> `workers.max`. The current value is `3`.
 Lane limits are derived from that number: normal review defaults to 2 shards
-for manual/backstop runs, scheduled normal review gets up to 27 after reserves,
-hot intake up to 19 shards, commit review 2 commits per page, and
-repair/issue implementation 22 live workers. Exact-item review, repair, and
+for manual/backstop runs, scheduled normal review gets up to 1 after reserves,
+hot intake up to 1 shard, commit review 1 commit per page, and
+repair/issue implementation 1 live worker. Exact-item review, repair, and
 issue implementation are priority work; normal review, hot intake, and commit
 review are background work and automatically yield when priority work is active.
 Use `workers.max` first when turning total Codex usage up or down; use the
