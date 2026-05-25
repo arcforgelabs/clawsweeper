@@ -8,8 +8,11 @@ test("repositoryProfileFor matches mixed-case input against Arc Forge profiles",
 
   assert.equal(profile.targetRepo, "arcforgelabs/arc-forge-console");
   assert.equal(profile.slug, "arcforgelabs-arc-forge-console");
-  assert.deepEqual(profile.applyCloseRules.issue, []);
-  assert.deepEqual(profile.applyCloseRules.pull_request, []);
+  assert.deepEqual(profile.applyCloseRules.issue, [
+    "implemented_on_main",
+    "duplicate_or_superseded",
+  ]);
+  assert.deepEqual(profile.applyCloseRules.pull_request, ["implemented_on_main"]);
 });
 
 test("repositoryProfileFor supports Arc Forge console reviews", () => {
@@ -18,8 +21,11 @@ test("repositoryProfileFor supports Arc Forge console reviews", () => {
   assert.equal(profile.targetRepo, "arcforgelabs/arc-forge-console");
   assert.equal(profile.slug, "arcforgelabs-arc-forge-console");
   assert.equal(profile.checkoutDir, "arc-forge-console");
-  assert.deepEqual(profile.applyCloseRules.issue, []);
-  assert.deepEqual(profile.applyCloseRules.pull_request, []);
+  assert.deepEqual(profile.applyCloseRules.issue, [
+    "implemented_on_main",
+    "duplicate_or_superseded",
+  ]);
+  assert.deepEqual(profile.applyCloseRules.pull_request, ["implemented_on_main"]);
 });
 
 test("repositoryProfileFor supports Arc Forge ClawSweeper self-review", () => {
