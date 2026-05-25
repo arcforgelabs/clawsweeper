@@ -33,26 +33,41 @@ jobs:
       CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
       CLAWSWEEPER_WEBHOOK_SECRET: ${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}
     steps:
+      - name: Check deploy prerequisites
+        id: prereqs
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in CLOUDFLARE_API_TOKEN CLAWSWEEPER_STATUS_INGEST_TOKEN CLAWSWEEPER_APP_PRIVATE_KEY CLAWSWEEPER_WEBHOOK_SECRET; do
+            if [ -z "${!name:-}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            printf 'deploy=false\n' >> "$GITHUB_OUTPUT"
+            printf '::notice::Skipping dashboard deploy; missing %s\n' "$(IFS=,; echo "${missing[*]}")"
+            exit 0
+          fi
+          printf 'deploy=true\n' >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        if: steps.prereqs.outputs.deploy == 'true'
 
       - uses: ./.github/actions/setup-pnpm
-
-      - name: Verify Cloudflare token is configured
-        run: test -n "$CLOUDFLARE_API_TOKEN"
+        if: steps.prereqs.outputs.deploy == 'true'
 
       - name: Prepare deploy config
         id: dashboard-config
+        if: steps.prereqs.outputs.deploy == 'true'
         run: |
-          test -n "$CLAWSWEEPER_STATUS_INGEST_TOKEN"
           cp dashboard/wrangler.toml dashboard/wrangler.deploy.toml
           printf 'INGEST_TOKEN = "%s"\n' "$CLAWSWEEPER_STATUS_INGEST_TOKEN" >> dashboard/wrangler.deploy.toml
           echo "config=dashboard/wrangler.deploy.toml" >> "$GITHUB_OUTPUT"
 
       - name: Sync Worker secrets
+        if: steps.prereqs.outputs.deploy == 'true'
         run: |
           set -euo pipefail
-          test -n "$CLAWSWEEPER_APP_PRIVATE_KEY"
-          test -n "$CLAWSWEEPER_WEBHOOK_SECRET"
           secrets_file="$RUNNER_TEMP/clawsweeper-worker-secrets.json"
           node -e '
             const fs = require("node:fs");
@@ -65,7 +80,9 @@ jobs:
           rm -f "$secrets_file"
 
       - name: Deploy Worker
+        if: steps.prereqs.outputs.deploy == 'true'
         run: npx wrangler@4.90.0 deploy --config "${{ steps.dashboard-config.outputs.config }}"
 
       - name: Smoke test live dashboard
+        if: steps.prereqs.outputs.deploy == 'true'
         run: pnpm run dashboard:smoke -- "$CLAWSWEEPER_STATUS_URL"
