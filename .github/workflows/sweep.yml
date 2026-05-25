@@ -312,8 +312,12 @@ jobs:
             ${{ steps.target.outputs.target_repo_name }}-git-${{ runner.os }}-
 
       - name: Check out target repository
+        env:
+          TARGET_GITHUB_TOKEN: ${{ steps.target-read-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
+          test -n "$TARGET_GITHUB_TOKEN"
+          git config --global url."https://x-access-token:${TARGET_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
           url="https://github.com/${{ steps.target.outputs.target_repo }}.git"
           cache_dir="${{ steps.target.outputs.target_checkout_dir }}-cache.git"
           checkout_dir="${{ steps.target.outputs.target_checkout_dir }}"
@@ -1028,8 +1032,12 @@ jobs:
             ${{ needs.plan.outputs.target_repo_name }}-git-${{ runner.os }}-
 
       - name: Check out target repository
+        env:
+          TARGET_GITHUB_TOKEN: ${{ steps.target-read-token.outputs.token || github.token }}
         run: |
           set -euo pipefail
+          test -n "$TARGET_GITHUB_TOKEN"
+          git config --global url."https://x-access-token:${TARGET_GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
           url="https://github.com/${{ needs.plan.outputs.target_repo }}.git"
           cache_dir="${{ needs.plan.outputs.target_checkout_dir }}-cache.git"
           checkout_dir="${{ needs.plan.outputs.target_checkout_dir }}"
@@ -1223,7 +1231,7 @@ jobs:
 
       - name: Apply review artifacts
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.target-write-token.outputs.token || github.token }}
           EXACT_ITEM: ${{ github.event.client_payload.item_number || github.event.inputs.item_number || github.event.inputs.item_numbers || '' }}
           HOT_INTAKE: ${{ needs.plan.outputs.hot_intake }}
           MAX_PAGES: ${{ needs.plan.outputs.max_pages }}
@@ -1257,7 +1265,7 @@ jobs:
       - name: Commit review records
         env:
           EXACT_ITEM: ${{ github.event.client_payload.item_number || github.event.inputs.item_number || github.event.inputs.item_numbers || '' }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.target-write-token.outputs.token || github.token }}
           HOT_INTAKE: ${{ needs.plan.outputs.hot_intake }}
           TARGET_REPO: ${{ needs.plan.outputs.target_repo }}
         run: |
