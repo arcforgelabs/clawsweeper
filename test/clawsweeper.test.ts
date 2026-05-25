@@ -11343,6 +11343,30 @@ test("background review capacity reserves expanding matrices and caps broad manu
   assert.match(commitBlock, /limit review_shards\.normal_default/);
 });
 
+test("operator review marker gets an isolated bounded manual lane", () => {
+  const workflow = readFileSync(".github/workflows/sweep.yml", "utf8");
+  const concurrencyBlock = workflow.slice(
+    workflow.indexOf("concurrency:"),
+    workflow.indexOf("\njobs:"),
+  );
+  const modeBlock = workflow.slice(
+    workflow.indexOf("- id: mode"),
+    workflow.indexOf("- id: select"),
+  );
+  const continueBlock = workflow.slice(
+    workflow.indexOf("- name: Continue sweep"),
+    workflow.indexOf("\n\n  recover-review-failures:"),
+  );
+
+  for (const block of [concurrencyBlock, modeBlock, continueBlock]) {
+    assert.match(block, /\[clawsweeper-operator-run=1\]/);
+  }
+  assert.match(concurrencyBlock, /clawsweeper-operator-review/);
+  assert.match(modeBlock, /operator_run=/);
+  assert.match(modeBlock, /Operator review run keeps requested shard count/);
+  assert.match(continueBlock, /!contains\(github\.event\.inputs\.additional_prompt/);
+});
+
 test("sweep event reviews and target fanout avoid storm amplification", () => {
   const workflow = readFileSync(".github/workflows/sweep.yml", "utf8");
   const eventBlock = workflow.slice(

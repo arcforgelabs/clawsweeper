@@ -232,6 +232,12 @@ their quiet lane size until their matrix shards exist, so overlapping manual or
 scheduled dispatches cannot temporarily exceed the shared worker budget while
 GitHub is still expanding jobs.
 
+For explicit operator stress tests, set `additional_prompt` to include
+`[clawsweeper-operator-run=1]`. Operator runs use a separate broad-review
+concurrency group, keep the requested `shard_count` up to the hard cap, and do
+not dispatch another continuation after publish. This is intended for bounded
+manual capacity tests, not normal backlog draining.
+
 Planning is also the runtime build point for matrix review. The plan job installs
 with pinned Node 24 and `pnpm@10.33.2`, builds `dist/` once, and uploads that
 runtime artifact. Review shards download the built `dist/` and run
