@@ -2,7 +2,7 @@ name: Setup CodexBar CLI
 description: Install CodexBar CLI for OAuth budget probes during sweep planning.
 inputs:
   version:
-    description: CodexBar release tag (for example v0.9.0) or latest.
+    description: CodexBar release tag (for example v0.29.0) or latest.
     default: "latest"
 runs:
   using: composite
@@ -11,7 +11,7 @@ runs:
       uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
       with:
         path: ~/.clawsweeper-repair/codexbar
-        key: ${{ runner.os }}-codexbar-${{ inputs.version }}-v1
+        key: ${{ runner.os }}-codexbar-${{ inputs.version }}-v2
         restore-keys: |
           ${{ runner.os }}-codexbar-${{ inputs.version }}-
           ${{ runner.os }}-codexbar-
@@ -30,11 +30,74 @@ runs:
         fi
 
         version="${{ inputs.version }}"
-        if [ "$version" = "latest" ]; then
-          asset_url="https://github.com/steipete/CodexBar/releases/latest/download/CodexBarCLI-linux-x86_64.tar.gz"
-        else
-          asset_url="https://github.com/steipete/CodexBar/releases/download/${version}/CodexBarCLI-linux-x86_64.tar.gz"
-        fi
+        case "$(uname -m)" in
+          x86_64|amd64) arch="x86_64" ;;
+          aarch64|arm64) arch="aarch64" ;;
+          *)
+            echo "unsupported runner architecture for CodexBar CLI: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+
+        resolve_asset_url() {
+          local release_version="$1"
+          local release_arch="$2"
+          local api_url asset_url tag
+
+          if [ "$release_version" = "latest" ]; then
+            api_url="https://api.github.com/repos/steipete/CodexBar/releases/latest"
+          else
+            api_url="https://api.github.com/repos/steipete/CodexBar/releases/tags/${release_version}"
+          fi
+
+          asset_url="$(
+            curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$api_url" \
+              | jq -r --arg arch "$release_arch" '
+                  .assets[]
+                  | select(
+                      (.name | test("^CodexBarCLI(-v[0-9.]+)?-linux-" + $arch + "\\.tar\\.gz$"))
+                      and (.name | test("\\.sha256$") | not)
+                    )
+                  | .browser_download_url
+                ' \
+              | head -1
+          )"
+          if [ -n "$asset_url" ] && [ "$asset_url" != "null" ]; then
+            printf '%s' "$asset_url"
+            return 0
+          fi
+
+          if [ "$release_version" = "latest" ]; then
+            tag="$(
+              curl -fsSL \
+                -H "Accept: application/vnd.github+json" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "$api_url" \
+                | jq -r '.tag_name // empty'
+            )"
+          else
+            tag="$release_version"
+          fi
+
+          for candidate in \
+            "https://github.com/steipete/CodexBar/releases/download/${tag}/CodexBarCLI-${tag}-linux-${release_arch}.tar.gz" \
+            "https://github.com/steipete/CodexBar/releases/download/${tag}/CodexBarCLI-linux-${release_arch}.tar.gz"; do
+            if curl -fsSI "$candidate" >/dev/null 2>&1; then
+              printf '%s' "$candidate"
+              return 0
+            fi
+          done
+
+          return 1
+        }
+
+        asset_url="$(resolve_asset_url "$version" "$arch")" || {
+          echo "failed to resolve CodexBar CLI download URL for version=${version} arch=${arch}" >&2
+          exit 1
+        }
 
         tmp_dir="$(mktemp -d)"
         trap 'rm -rf "$tmp_dir"' EXIT
