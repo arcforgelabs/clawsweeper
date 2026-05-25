@@ -17,3 +17,19 @@ export function codexEnv(options: CodexEnvOptions = {}): NodeJS.ProcessEnv {
   env.GIT_OPTIONAL_LOCKS = "0";
   return env;
 }
+
+export function codexForcedLoginMethod(): string {
+  const configured = String(process.env.CLAWSWEEPER_CODEX_LOGIN_METHOD ?? "").trim();
+  if (configured) return configured;
+  if (
+    process.env.GITHUB_ACTIONS === "true" &&
+    process.env.CLAWSWEEPER_ALLOW_API_CODEX_AUTH !== "1"
+  ) {
+    return "chatgpt";
+  }
+  return "api";
+}
+
+export function codexForcedLoginConfig(): string {
+  return `forced_login_method=${JSON.stringify(codexForcedLoginMethod())}`;
+}

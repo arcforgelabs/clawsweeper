@@ -24,7 +24,7 @@ import {
   repositoryProfileForSlug,
   type RepositoryProfile,
 } from "./repository-profiles.js";
-import { codexEnv } from "./codex-env.js";
+import { codexEnv, codexForcedLoginConfig } from "./codex-env.js";
 import {
   ghRetryKind,
   ghRetryWaitMs,
@@ -55,7 +55,7 @@ import {
 } from "./clawsweeper-args.js";
 import { escapeRegExp, safeOutputTail, trimMiddle, truncateText } from "./clawsweeper-text.js";
 
-export { codexEnv } from "./codex-env.js";
+export { codexEnv, codexForcedLoginConfig } from "./codex-env.js";
 export { parseGhJson, parseGhJsonLines } from "./github-json.js";
 export { itemNumbersArg } from "./clawsweeper-args.js";
 export { safeOutputTail } from "./clawsweeper-text.js";
@@ -5568,7 +5568,7 @@ function runCodex(options: {
   }
   const codexConfig = [
     `model_reasoning_effort="${options.reasoningEffort}"`,
-    'forced_login_method="api"',
+    codexForcedLoginConfig(),
     'approval_policy="never"',
   ];
   if (options.serviceTier) codexConfig.splice(1, 0, `service_tier="${options.serviceTier}"`);
@@ -5748,7 +5748,7 @@ function runCodexAssist(options: {
   writeFileSync(promptPath, prompt, "utf8");
   const codexConfig = [
     `model_reasoning_effort="${options.reasoningEffort}"`,
-    'forced_login_method="api"',
+    codexForcedLoginConfig(),
     'approval_policy="never"',
   ];
   const result = spawnSync(

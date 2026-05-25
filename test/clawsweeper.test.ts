@@ -29,6 +29,7 @@ import {
   compactMappedSlice,
   compactMappedWindow,
   codexEnv,
+  codexForcedLoginConfig,
   dashboardClosedAt,
   fixedPullRequestFromCommitPullsForTest,
   featureShowcaseLabelsForTest,
@@ -11597,6 +11598,24 @@ test("codex subprocess env can expose an explicit read-only GitHub token", () =>
     assert.equal(env.COMMIT_SWEEPER_TARGET_GH_TOKEN, undefined);
     assert.equal(env.CLAWSWEEPER_PROOF_INSPECTION_TOKEN, undefined);
     assert.equal(env.GIT_OPTIONAL_LOCKS, "0");
+  } finally {
+    process.env = originalEnv;
+  }
+});
+
+test("codex forced login method uses ChatGPT in Actions unless API auth is explicitly enabled", () => {
+  const originalEnv = { ...process.env };
+  try {
+    delete process.env.CLAWSWEEPER_CODEX_LOGIN_METHOD;
+    process.env.GITHUB_ACTIONS = "true";
+    process.env.CLAWSWEEPER_ALLOW_API_CODEX_AUTH = "0";
+    assert.equal(codexForcedLoginConfig(), 'forced_login_method="chatgpt"');
+
+    process.env.CLAWSWEEPER_ALLOW_API_CODEX_AUTH = "1";
+    assert.equal(codexForcedLoginConfig(), 'forced_login_method="api"');
+
+    process.env.CLAWSWEEPER_CODEX_LOGIN_METHOD = "custom-oauth";
+    assert.equal(codexForcedLoginConfig(), 'forced_login_method="custom-oauth"');
   } finally {
     process.env = originalEnv;
   }

@@ -136,6 +136,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
+  CLAWSWEEPER_ALLOW_API_CODEX_AUTH: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && '1' || '0' }}
 
 concurrency:
   group: ${{ (github.event_name == 'schedule' && (github.event.schedule == '4/15 * * * *' || github.event.schedule == '41 * * * *' || github.event.schedule == '37 */6 * * *')) && format('clawsweeper-target-fanout-{0}', github.event.schedule || github.run_id) || github.event_name == 'repository_dispatch' && format('clawsweeper-event-{0}-{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || github.run_id) || format('{0}-{1}', ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true' && github.event.inputs.apply_sync_comments_only == 'true') || (github.event_name == 'schedule' && github.event.schedule == '6,21,36,51 * * * *')) && 'clawsweeper-comment-sync' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.apply_existing == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '3 * * * *' || github.event.schedule == '18 * * * *' || github.event.schedule == '33 * * * *' || github.event.schedule == '48 * * * *' || github.event.schedule == '8,23,38,53 * * * *'))) && 'clawsweeper-apply' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.item_number != '' || github.event.inputs.item_numbers != '')) && format('clawsweeper-intake-exact-{0}', github.event.inputs.item_number || github.event.inputs.item_numbers) || ((github.event_name == 'workflow_dispatch' && github.event.inputs.hot_intake == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '*/5 * * * *' || github.event.schedule == '2/5 * * * *'))) && 'clawsweeper-intake-v2' || ((github.event_name == 'workflow_dispatch' && github.event.inputs.audit_dashboard == 'true') || (github.event_name == 'schedule' && (github.event.schedule == '7 */6 * * *' || github.event.schedule == '12 */6 * * *' || github.event.schedule == '17 */6 * * *'))) && 'clawsweeper-audit' || 'clawsweeper-review', github.event.inputs.target_repo || github.event.client_payload.target_repo || ((github.event.schedule == '17 */6 * * *') && 'arcforgelabs/clawsweeper' || ((github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *' || github.event.schedule == '8,23,38,53 * * * *' || github.event.schedule == '12 */6 * * *') && 'arcforgelabs/arc-forge-console' || 'arcforgelabs/arc-forge-console'))) }}
@@ -297,10 +298,10 @@ jobs:
 
       - uses: ./.github/actions/setup-codex
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE != 'subscription' && secrets.OPENAI_API_KEY || '' }}
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
-          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
+          auth-mode: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
           login-status: "true"
 
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
@@ -1016,10 +1017,10 @@ jobs:
 
       - uses: ./clawsweeper/.github/actions/setup-codex
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE != 'subscription' && secrets.OPENAI_API_KEY || '' }}
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
-          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
+          auth-mode: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
           login-status: "true"
 
       - uses: ./clawsweeper/.github/actions/setup-media-proof-tools
@@ -1424,7 +1425,7 @@ jobs:
         timeout-minutes: 15
         env:
           GH_TOKEN: ${{ steps.target-write-token.outputs.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && secrets.OPENAI_API_KEY || '' }}
           TARGET_REPO: ${{ needs.plan.outputs.target_repo }}
         run: |
           set -euo pipefail
@@ -1474,7 +1475,7 @@ jobs:
         timeout-minutes: 30
         env:
           GH_TOKEN: ${{ steps.target-write-token.outputs.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && secrets.OPENAI_API_KEY || '' }}
           TARGET_REPO: ${{ needs.plan.outputs.target_repo }}
         run: |
           set -euo pipefail
@@ -1824,7 +1825,7 @@ jobs:
       - name: Apply unchanged proposed decisions with checkpoints
         env:
           GH_TOKEN: ${{ steps.target-write-token.outputs.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && secrets.OPENAI_API_KEY || '' }}
           TARGET_REPO: ${{ steps.target.outputs.target_repo }}
           CLAWSWEEPER_PUBLISH_THROTTLE_STATUS: "true"
           CLAWSWEEPER_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}

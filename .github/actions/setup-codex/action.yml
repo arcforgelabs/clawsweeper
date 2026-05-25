@@ -5,7 +5,7 @@ inputs:
     description: Codex CLI npm package version.
     default: "0.128.0"
   auth-mode:
-    description: Authentication mode. subscription writes CODEX_HOME/auth.json from CODEX_AUTH_JSON_B64; proxy uses OPENAI_API_KEY via the responses proxy; login uses codex login --with-api-key.
+    description: Authentication mode. Arc Forge workflows use subscription only; proxy/login are legacy upstream-compatible modes.
     default: "subscription"
   codex-home:
     description: CODEX_HOME directory. Defaults to an isolated per-run ClawSweeper directory.
@@ -69,6 +69,10 @@ runs:
       run: |
         set -euo pipefail
         export CODEX_HOME="${CODEX_HOME:?}"
+        if [[ -n "${OPENAI_API_KEY:-}${CODEX_API_KEY:-}${PROXY_API_KEY:-}" ]]; then
+          echo "API-key auth variables are not allowed in subscription mode." >&2
+          exit 1
+        fi
         test -n "${CODEX_AUTH_JSON_B64:-}"
         printf '%s' "$CODEX_AUTH_JSON_B64" | base64 -d > "$CODEX_HOME/auth.json"
         chmod 600 "$CODEX_HOME/auth.json"

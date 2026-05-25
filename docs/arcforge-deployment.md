@@ -50,7 +50,8 @@ Repository variables on `arcforgelabs/clawsweeper`:
 
 | Variable | Bootstrap value | Purpose |
 |----------|-----------------|--------|
-| `CLAWSWEEPER_CODEX_AUTH_MODE` | `subscription` | Use ChatGPT/Codex subscription auth instead of pay-as-you-go API key |
+| `CLAWSWEEPER_ALLOW_API_CODEX_AUTH` | unset / `0` | Keep API-key Codex auth disabled for Arc Forge bootstrap |
+| `CLAWSWEEPER_CODEX_AUTH_MODE` | unset / `subscription` | Future opt-in auth mode; ignored unless `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1` |
 | `CLAWSWEEPER_ENABLE_SCHEDULES` | unset / `0` | Scheduled `sweep.yml` jobs no-op until first manual verification succeeds |
 | `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE` | unset / `0` | Repair command router stays dry-run |
 | `CLAWSWEEPER_AUTO_IMPLEMENT_REPRO_BUGS` | unset / `0` | No issue implementation PRs |
@@ -64,28 +65,28 @@ Required secrets on `arcforgelabs/clawsweeper`:
 | `CLAWSWEEPER_APP_CLIENT_ID` | Arc Forge GitHub App client ID |
 | `CLAWSWEEPER_APP_PRIVATE_KEY` | Arc Forge GitHub App private key PEM |
 
-Optional fallback secrets:
+### Codex auth mode
 
-| Secret | Purpose |
-|--------|---------|
-| `OPENAI_API_KEY` | Only when `CLAWSWEEPER_CODEX_AUTH_MODE=proxy` or `login` |
-
-### Codex auth modes
-
-Default bootstrap mode is **subscription**:
+Arc Forge workflows default to **subscription** mode only:
 
 1. On a trusted machine, run `codex login` with your ChatGPT subscription account.
 2. Base64-encode `~/.codex/auth.json` without logging it: `base64 -w0 ~/.codex/auth.json`.
 3. Store the result as repo secret `CODEX_AUTH_JSON_B64`.
-4. Set repo variable `CLAWSWEEPER_CODEX_AUTH_MODE=subscription`.
 
-`setup-codex` writes the decoded file into an isolated per-run `CODEX_HOME/auth.json`. Codex subprocesses never receive `OPENAI_API_KEY` in subscription mode.
+`setup-codex` writes the decoded file into an isolated per-run `CODEX_HOME/auth.json`.
+Arc Forge workflows do not pass `OPENAI_API_KEY` while
+`CLAWSWEEPER_ALLOW_API_CODEX_AUTH` is unset or `0`, and subscription setup fails
+if API-key auth variables are present. OAuth/auth.json failures are loud job
+failures, not fallbacks to pay-as-you-go API billing.
+
+Future API-key auth is still available through the reusable `setup-codex` action.
+To enable it intentionally, set `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1`, set
+`CLAWSWEEPER_CODEX_AUTH_MODE` to `proxy` or `login`, and provide
+`OPENAI_API_KEY`.
 
 **Rotation:** subscription refresh tokens expire or rotate. When `codex login status` fails in Actions, refresh the local login and update `CODEX_AUTH_JSON_B64`.
 
 **Long-term:** prefer a self-hosted runner with persistent `CODEX_HOME` OAuth instead of storing refresh material in GitHub secrets.
-
-**API key fallback:** set `CLAWSWEEPER_CODEX_AUTH_MODE=proxy`, provide `OPENAI_API_KEY`, and accept pay-as-you-go token billing.
 
 Optional later:
 

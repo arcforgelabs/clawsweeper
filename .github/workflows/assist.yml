@@ -45,6 +45,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
   CODEX_CLI_VERSION: ${{ vars.CLAWSWEEPER_CODEX_CLI_VERSION || '0.128.0' }}
+  CLAWSWEEPER_ALLOW_API_CODEX_AUTH: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && '1' || '0' }}
 
 concurrency:
   group: ${{ format('clawsweeper-assist-{0}-{1}-{2}', github.event.client_payload.target_repo || inputs.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.item_number || inputs.item_number || github.run_id, github.event.client_payload.comment_id || inputs.comment_id || github.run_id) }}
@@ -138,11 +139,11 @@ jobs:
 
       - uses: ./.github/actions/setup-codex
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE != 'subscription' && secrets.OPENAI_API_KEY || '' }}
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
         with:
           version: ${{ env.CODEX_CLI_VERSION }}
-          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
+          auth-mode: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
 
       - name: Answer maintainer question
         env:

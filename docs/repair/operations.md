@@ -200,11 +200,14 @@ Use Blacksmith labels only when you intentionally want a non-parity hosted runne
 pnpm run repair:dispatch -- jobs/openclaw/cluster-*.md --mode plan --runner blacksmith-4vcpu-ubuntu-2404
 ```
 
-The workflow uses Node 24 and starts a local Codex Responses proxy from
-`OPENAI_API_KEY` inside an isolated per-run `CODEX_HOME`. Codex subprocesses use
-that proxy config and run without raw OpenAI or Codex API key environment
-variables. The legacy `codex login` path remains available only through the
-local `setup-codex` action's `auth-mode: login` input.
+The Arc Forge workflow uses Node 24 and subscription-only Codex OAuth from
+`CODEX_AUTH_JSON_B64` inside an isolated per-run `CODEX_HOME` while
+`CLAWSWEEPER_ALLOW_API_CODEX_AUTH` is unset or `0`. The workflow does not pass
+`OPENAI_API_KEY` in that mode; subscription setup fails when API-key auth
+variables are present, so OAuth/auth.json failures stop the job instead of
+falling back to pay-as-you-go API billing. API-key auth remains available only
+after setting `CLAWSWEEPER_ALLOW_API_CODEX_AUTH=1` and choosing an API-backed
+`CLAWSWEEPER_CODEX_AUTH_MODE`.
 
 Codex runs in a read-only sandbox for classification and receives no GitHub token. GitHub read access is scoped to deterministic preflight scripts. For reviewed fix artifacts, `execute-fix-artifact` gives Codex a temporary target checkout without GitHub credentials, then the deterministic executor commits, pushes, opens the replacement PR, and closes uneditable source PRs only after the replacement exists. When a replacement carries contributor work forward, non-bot source PR authors are added as `Co-authored-by` trailers and named in the replacement PR body and source close comment. Remaining write access is scoped to `apply-result`.
 

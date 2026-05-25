@@ -141,7 +141,7 @@ Run manually:
 
 ```bash
 pnpm run build:repair
-OPENAI_API_KEY=... pnpm run repair:spam-scan -- \
+pnpm run repair:spam-scan -- \
   --write-report \
   --repo openclaw/openclaw \
   --lookback-minutes 180 \

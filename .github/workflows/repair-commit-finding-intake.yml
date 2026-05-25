@@ -49,6 +49,7 @@ env:
   CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
   CODEX_CLI_VERSION: ${{ vars.CLAWSWEEPER_CODEX_CLI_VERSION || '0.128.0' }}
   CLAWSWEEPER_ALLOWED_OWNER: ${{ vars.CLAWSWEEPER_ALLOWED_OWNER || 'openclaw' }}
+  CLAWSWEEPER_ALLOW_API_CODEX_AUTH: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && '1' || '0' }}
   CLAWSWEEPER_ALLOW_EXECUTE: ${{ vars.CLAWSWEEPER_ALLOW_EXECUTE == '1' && '1' || '0' }}
   CLAWSWEEPER_ALLOW_FIX_PR: ${{ vars.CLAWSWEEPER_ALLOW_FIX_PR == '1' && '1' || '0' }}
   CLAWSWEEPER_ALLOW_MERGE: "0"
@@ -152,9 +153,9 @@ jobs:
         with:
           version: ${{ env.CODEX_CLI_VERSION }}
           cache-suffix: target-pnpm
-          auth-mode: ${{ vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
+          auth-mode: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE || 'subscription' }}
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && vars.CLAWSWEEPER_CODEX_AUTH_MODE != 'subscription' && secrets.OPENAI_API_KEY || '' }}
           CODEX_AUTH_JSON_B64: ${{ secrets.CODEX_AUTH_JSON_B64 }}
 
       - name: Review synthetic result
@@ -167,7 +168,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 40
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && secrets.OPENAI_API_KEY || '' }}
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: pnpm run repair:execute-fix -- "${{ steps.prepare.outputs.job_path }}" "${{ steps.prepare.outputs.result_path }}"
 

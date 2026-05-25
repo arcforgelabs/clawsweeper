@@ -56,6 +56,7 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   CLAWSWEEPER_APP_CLIENT_ID: ${{ secrets.CLAWSWEEPER_APP_CLIENT_ID }}
+  CLAWSWEEPER_ALLOW_API_CODEX_AUTH: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && '1' || '0' }}
 
 concurrency:
   group: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.comment_id && format('spam-scanner-{0}-issue-comment-{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.comment_id) || github.event_name == 'repository_dispatch' && github.event.client_payload.review_comment_id && format('spam-scanner-{0}-review-comment-{1}', github.event.client_payload.target_repo || 'arcforgelabs/arc-forge-console', github.event.client_payload.review_comment_id) || format('spam-scanner-{0}', github.event.inputs.target_repo || github.event.client_payload.target_repo || vars.CLAWSWEEPER_TARGET_REPO || 'arcforgelabs/arc-forge-console') }}
@@ -112,7 +113,7 @@ jobs:
       - name: Scan spam comments
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ vars.CLAWSWEEPER_ALLOW_API_CODEX_AUTH == '1' && secrets.OPENAI_API_KEY || '' }}
         run: |
           set -euo pipefail
           target_repo="${{ github.event_name == 'workflow_dispatch' && inputs.target_repo || vars.CLAWSWEEPER_TARGET_REPO || 'arcforgelabs/arc-forge-console' }}"
