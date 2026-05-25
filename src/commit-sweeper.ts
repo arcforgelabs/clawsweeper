@@ -35,7 +35,7 @@ interface CommitMetadata {
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_CODEX_MODEL = "gpt-5.5";
-const DEFAULT_REASONING_EFFORT = "high";
+const DEFAULT_REASONING_EFFORT = "medium";
 const DEFAULT_SERVICE_TIER = "";
 const COMMIT_REVIEW_CHECK_NAME = "ClawSweeper Commit Review";
 
