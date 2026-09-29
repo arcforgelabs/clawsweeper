@@ -170,6 +170,26 @@
         "ready_timeout_seconds": 240,
         "max_recording_seconds": 90
       }
+    },
+    {
+      "owner": "arcforgelabs",
+      "deny_repositories": ["arcforgelabs/clawsweeper-state", "arcforgelabs/clawsweeper-legacy", "arcforgelabs/.github"],
+      "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
+      "prompt_note": "Use the {target_repo} source tree and current default branch. VISION.md at the repository root is the canonical product vision and README.md indexes the other docs; GitHub issues hold goals and acceptance criteria. This repository uses the conservative Arc Forge onboarding profile: review and durable comments only; do not auto-close issues or pull requests.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "pnpm",
+      "validation_commands": [],
+      "changed_gate": null,
+      "live_test": {
+        "enabled": false,
+        "surface_default": "terminal",
+        "setup": ["pnpm install --frozen-lockfile"],
+        "ready_timeout_seconds": 240,
+        "max_recording_seconds": 90
+      }
     }
   ],
   "core_target_overrides": {

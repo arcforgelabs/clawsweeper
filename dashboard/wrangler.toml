@@ -1,6 +1,6 @@
 name = "clawsweeper-status"
 main = "worker.ts"
-account_id = "91b59577e757131d68d55a471fe32aca"
+account_id = "fdc03af65091401927c0557d895df743"
 compatibility_date = "2026-05-11"
 workers_dev = true
 
@@ -39,21 +39,21 @@ tag = "v3"
 new_sqlite_classes = ["GithubEtagCache"]
 
 [[routes]]
-pattern = "clawsweeper.openclaw.ai"
+pattern = "clawsweeper.arcforge.au"
 custom_domain = true
 
 [vars]
-CLAWSWEEPER_REPO = "openclaw/clawsweeper"
+CLAWSWEEPER_REPO = "arcforgelabs/clawsweeper"
 CLAWSWEEPER_DASHBOARD_WORKFLOW_SOURCE = "poll"
-CLAWSWEEPER_APP_CLIENT_ID = "Iv23liOECG0slfuhz093"
-CLAWSWEEPER_CRABFLEET_URL = "https://crabfleet.openclaw.ai"
-TARGET_REPOS = "openclaw/openclaw,openclaw/clawhub,openclaw/clawsweeper,openclaw/fs-safe"
+CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
+CLAWSWEEPER_CRABFLEET_URL = ""
+TARGET_REPOS = "arcforgelabs/arc-forge-deck,arcforgelabs/clawsweeper"
 # Explicit public-only allowlist for canonical repository + issue/PR references
 # rendered in OpenClaw Bay. Repositories must be verified public before addition.
-PUBLIC_BAY_REPOS = "openclaw/openclaw,openclaw/clawhub,openclaw/clawsweeper,openclaw/fs-safe"
-APPLY_TARGET_REPOS = "openclaw/openclaw"
-APPLY_OPTIONAL_TARGET_REPOS = "openclaw/clawhub"
-CLAWSWEEPER_ENABLE_CLAWHUB = "1"
+PUBLIC_BAY_REPOS = "arcforgelabs/clawsweeper"
+APPLY_TARGET_REPOS = ""
+APPLY_OPTIONAL_TARGET_REPOS = ""
+CLAWSWEEPER_ENABLE_CLAWHUB = "0"
 WORKER_BUDGET = "128"
 EXACT_REVIEW_ACTIONS_BUDGET = "194"
 WORKER_DETAIL_RUN_LIMIT = "128"
@@ -92,7 +92,7 @@ EXACT_REVIEW_TARGET_RATE_PER_HOUR = "60"
 EXACT_REVIEW_TARGET_BURST = "6"
 EXACT_REVIEW_PUBLICATION_BATCHING_ENABLED = "1"
 EXACT_REVIEW_DIRECT_PUBLICATION_ENABLED = "1"
-EXACT_REVIEW_STATE_REPO = "openclaw/clawsweeper-state"
+EXACT_REVIEW_STATE_REPO = "arcforgelabs/clawsweeper-state"
 EXACT_REVIEW_STATE_REF = "state"
 EXACT_REVIEW_PUBLICATION_BATCH_SIZE = "8"
 EXACT_REVIEW_PUBLICATION_BATCH_MAX_CONCURRENT = "8"
