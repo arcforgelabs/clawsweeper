@@ -73,13 +73,20 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
         },
       };
       config.auth = { order: { xai: [native.profileId] } };
+      // One permitted tool does not need a discovery/dispatch indirection.
+      (config.tools as Record<string, unknown>).toolSearch = false;
       config.plugins = { allow: ["xai"], slots: { memory: "none" } };
     }
     writeFileSync(configPath, `${JSON.stringify(config)}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
-    writeFileSync(promptPath, options.prompt, { encoding: "utf8", mode: 0o600 });
+    const prompt =
+      native && !options.checkoutInspection
+        ? "Runtime constraints: This is a read-only review. Your only tool is read, rooted in the target checkout. Shell, git commands, tests, writes, and tool discovery are unavailable. Use the supplied diff/context and read source files directly; report any missing evidence instead of attempting unavailable tools. Return the requested final review schema.\n\n" +
+          options.prompt
+        : options.prompt;
+    writeFileSync(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
     const sessionId = openclawSessionId(options.label);
     const args = native
       ? [

@@ -39,8 +39,8 @@ inspection still allows only the read tool and must return the host-selected
 line. Its receipt is decoded from the exact native session's SQLite events,
 including zstd records, then checked by the existing exact-path read validator.
 Missing events, malformed payloads, failed reads, extra tools, wrong paths, and
-oversized transcripts fail closed. Inspection retains its existing 30-second
-budget. Temporary state is removed after the existing process supervisor exits.
+oversized transcripts fail closed. Native inspection uses low reasoning effort and up to 90 seconds, bounded
+by the remaining overall review budget; legacy inspection retains 30 seconds. Temporary state is removed after the existing process supervisor exits.
 
 Input scans, output scans, and report/schema validation remain in place. Native
 exec success must also identify the requested xAI model. OpenClaw Bay is
@@ -99,3 +99,8 @@ rejected the outside read with `Path escapes sandbox root`; the active catalog
 contained only the read capability (plus tool discovery/dispatch). Evidence is
 retained privately under `/tmp/horizon-readonly-boundary/`. This tests the real
 read boundary, not arbitrary vulnerabilities in the underlying runtime.
+
+Native reviews expose `read` directly with tool search disabled. Full-review
+prompts state the actual read-only capabilities; checkout challenges retain
+their exact-line instructions. This avoids unavailable-tool loops observed in
+a live Grok run. A direct-read canary again confirmed outside reads are blocked.

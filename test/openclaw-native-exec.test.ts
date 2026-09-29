@@ -162,7 +162,7 @@ test("native exec uses isolated state and saved OAuth, and preserves exact-path 
 const fs=require('node:fs'), path=require('node:path'), {DatabaseSync}=require('node:sqlite'), {zstdCompressSync}=require('node:zlib');
 const args=process.argv.slice(2), arg=n=>args[args.indexOf(n)+1], state=arg('--state-dir');
 const config=JSON.parse(fs.readFileSync(arg('--config'),'utf8'));
-fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify({args,config,state,ambient:process.env.OPENCLAW_STATE_DIR,key:process.env.XAI_API_KEY??null,github:process.env.GITHUB_TOKEN??null,inheritedToken:process.env.OPENCLAW_GATEWAY_TOKEN??null}));
+fs.writeFileSync(${JSON.stringify(recordPath)},JSON.stringify({args,config,state,prompt:fs.readFileSync(arg('--message-file'),'utf8'),ambient:process.env.OPENCLAW_STATE_DIR,key:process.env.XAI_API_KEY??null,github:process.env.GITHUB_TOKEN??null,inheritedToken:process.env.OPENCLAW_GATEWAY_TOKEN??null}));
 const dbPath=path.join(state,'agents','reviewer','agent','openclaw-agent.sqlite');fs.mkdirSync(path.dirname(dbPath),{recursive:true});
 const db=new DatabaseSync(dbPath);db.exec('CREATE TABLE transcript_events(session_id TEXT,seq INTEGER,event_json TEXT,event_zstd BLOB,event_utf8_bytes INTEGER)');
 const call=(id,p)=>({type:'message',message:{role:'assistant',content:[{type:'toolCall',id,name:'read',arguments:{path:p}}]}});
@@ -209,6 +209,8 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
         assert.equal((output.error as NodeJS.ErrnoException)?.code, "ETIMEDOUT");
       const record = JSON.parse(readFileSync(recordPath, "utf8"));
       assert.deepEqual(record.args.slice(0, 2), ["agent", "exec"]);
+      if (variant === "full-review") assert.match(record.prompt, /^Runtime constraints:/);
+      else assert.equal(record.prompt, "Read proof.txt");
       assert.equal(record.key, null);
       assert.equal(record.github, null);
       assert.equal(record.inheritedToken, null);
@@ -217,6 +219,7 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
       assert.deepEqual(record.config.auth.order.xai, [profile]);
       assert.deepEqual(record.config.plugins.allow, ["xai"]);
       assert.deepEqual(record.config.tools.allow, ["read"]);
+      assert.equal(record.config.tools.toolSearch, false);
       assert.equal(record.config.tools.fs.workspaceOnly, true);
       assert.equal(record.config.tools.exec.mode, "deny");
       assert.equal(existsSync(record.state), false);
