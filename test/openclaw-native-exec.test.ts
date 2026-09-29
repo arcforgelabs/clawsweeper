@@ -136,6 +136,7 @@ test("native OAuth account guard refuses other accounts, API keys, and fallback 
 test("native exec uses isolated state and saved OAuth, and preserves exact-path compressed read validation", () => {
   for (const variant of [
     "success",
+    "full-review",
     "commentary",
     "final-only",
     "missing-final",
@@ -194,13 +195,15 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
           GITHUB_TOKEN: "must-not-pass",
           OPENCLAW_GATEWAY_TOKEN: "must-not-pass",
         },
-        checkoutInspection: { expectedText: "expected-line", expectedPath: "proof.txt" },
+        ...(variant === "full-review"
+          ? {}
+          : { checkoutInspection: { expectedText: "expected-line", expectedPath: "proof.txt" } }),
       });
-      if (!["success", "commentary", "final-only"].includes(variant))
+      if (!["success", "full-review", "commentary", "final-only"].includes(variant))
         assert.ok(output.error || output.status !== 0, variant);
       else {
         assert.equal(output.status, 0);
-        assert.equal(output.stdout, "");
+        assert.equal(output.stdout, variant === "full-review" ? "expected-line" : "");
       }
       if (variant === "timeout")
         assert.equal((output.error as NodeJS.ErrnoException)?.code, "ETIMEDOUT");
@@ -214,6 +217,8 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
       assert.deepEqual(record.config.auth.order.xai, [profile]);
       assert.deepEqual(record.config.plugins.allow, ["xai"]);
       assert.deepEqual(record.config.tools.allow, ["read"]);
+      assert.equal(record.config.tools.fs.workspaceOnly, true);
+      assert.equal(record.config.tools.exec.mode, "deny");
       assert.equal(existsSync(record.state), false);
       assert.equal(existsSync(authDir), true);
     } finally {

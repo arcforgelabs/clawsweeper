@@ -53,7 +53,13 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
     const runStateDir = join(stateDir, "run");
     if (native) mkdirSync(runStateDir, { mode: 0o700 });
     const timeoutSeconds = Math.max(1, Math.ceil(options.timeoutMs / 1_000));
-    const config = openclawConfig(options.env, timeoutSeconds, Boolean(options.checkoutInspection));
+    // Native reviews must never execute untrusted repository instructions on the
+    // credential-owning gateway. Workspace-rooted read is sufficient for review.
+    const config = openclawConfig(
+      options.env,
+      timeoutSeconds,
+      Boolean(native || options.checkoutInspection),
+    );
     if (native) {
       const agents = config.agents as Record<string, unknown>;
       agents.defaults = {

@@ -87,3 +87,15 @@ The final adapter also passed a fresh real checkout challenge using mixed-case
 its base; the focused native/process suite passes all 19 tests. Documentation
 and CLI-label regression tests also pass. These baseline failures are not waived
 for unrelated future changes.
+
+Native reviews expose only the workspace-rooted `read` tool, with host execution
+denied. The full review has the same restriction as the checkout challenge;
+untrusted PR content cannot invoke shell commands to read the gateway App key or
+process environment. This lane does not run repository tests or implement fixes.
+
+A live full-native boundary test on Arc Haven read `inside.txt` successfully and
+attempted a harmless canary outside its checkout. The retained tool result
+rejected the outside read with `Path escapes sandbox root`; the active catalog
+contained only the read capability (plus tool discovery/dispatch). Evidence is
+retained privately under `/tmp/horizon-readonly-boundary/`. This tests the real
+read boundary, not arbitrary vulnerabilities in the underlying runtime.
