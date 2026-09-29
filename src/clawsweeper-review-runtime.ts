@@ -10,6 +10,7 @@ import {
 import { dirname, join, relative, resolve } from "node:path";
 import {
   agentRunner,
+  nativeCheckoutDiagnosticPathForEnv,
   reviewNetworkCapability,
   runAgentCheckoutInspection,
   runAgentProcess,
@@ -961,6 +962,7 @@ ${extra}
     timeoutMs: number;
     scanSource: AgentScanSource;
     initialPrompt: string;
+    checkoutDiagnosticPath?: string;
   }): CodexProcessResult {
     const dirtyBefore = openclawDirtyStatus(options.openclawDir);
     if (dirtyBefore) {
@@ -984,6 +986,9 @@ ${extra}
         preserveCodexAuth: options.preserveCodexAuth,
       }),
       timeoutMs: options.timeoutMs,
+      ...(options.checkoutDiagnosticPath
+        ? { checkoutDiagnosticPath: options.checkoutDiagnosticPath }
+        : {}),
     });
   }
 
@@ -1065,6 +1070,10 @@ ${extra}
             headSha: stringOrUndefined(asRecord(pull.head).sha) ?? "",
           }
         : { kind: "prompt" };
+    const checkoutDiagnosticPath = nativeCheckoutDiagnosticPathForEnv(
+      options.workDir,
+      options.item.number,
+    );
     const checkoutInspection = runReviewCheckoutInspection({
       scanSource,
       initialPrompt: prompt,
@@ -1074,12 +1083,16 @@ ${extra}
       ...(options.preserveCodexAuth === undefined
         ? {}
         : { preserveCodexAuth: options.preserveCodexAuth }),
+      ...(checkoutDiagnosticPath ? { checkoutDiagnosticPath } : {}),
     });
     if (checkoutInspection.error || checkoutInspection.status !== 0) {
       const stderr = redactedOutputTail(checkoutInspection.stderr);
       const stdout = redactedOutputTail(checkoutInspection.stdout);
+      // Post-run auth bookkeeping can warn on stderr after a successful process.
+      // The checkout validation error is the failure; stderr stays beside it.
+      const preciseFailure = redactedOutputTail(checkoutInspection.error?.message);
       throw new CodexReviewError({
-        message: `Read-only checkout inspection failed for #${options.item.number}: ${stderr || stdout || checkoutInspection.error?.message || "unknown sandbox failure"}`,
+        message: `Read-only checkout inspection failed for #${options.item.number}: ${preciseFailure || stderr || stdout || "unknown sandbox failure"}`,
         status: checkoutInspection.status,
         stdout,
         stderr,
