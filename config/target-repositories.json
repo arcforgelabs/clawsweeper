@@ -173,7 +173,11 @@
     },
     {
       "owner": "arcforgelabs",
-      "deny_repositories": ["arcforgelabs/clawsweeper-state", "arcforgelabs/clawsweeper-legacy", "arcforgelabs/.github"],
+      "deny_repositories": [
+        "arcforgelabs/clawsweeper-state",
+        "arcforgelabs/clawsweeper-legacy",
+        "arcforgelabs/.github"
+      ],
       "allow_repo_name_pattern": "^[A-Za-z0-9_.-]+$",
       "prompt_note": "Use the {target_repo} source tree and current default branch. VISION.md at the repository root is the canonical product vision and README.md indexes the other docs; GitHub issues hold goals and acceptance criteria. This repository uses the conservative Arc Forge onboarding profile: review and durable comments only; do not auto-close issues or pull requests.",
       "apply_close_rules": {

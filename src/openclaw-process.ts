@@ -1,12 +1,16 @@
 import { isRecord } from "./value-coerce.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizedOutputFileBytes, normalizedTailBytes } from "./codex-output-capture.js";
 import type { CodexProcessResult } from "./codex-process.js";
+import {
+  assertExclusiveNativeXaiProfile,
+  readNativeOpenclawTranscript,
+} from "./openclaw-native-transcript.js";
 
 const OPENCLAW_PROCESS_WORKER_PATH = fileURLToPath(
   new URL("./openclaw-process-worker.js", import.meta.url),
@@ -45,32 +49,65 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
   const stdoutPath = options.stdoutPath ?? join(stateDir, "stdout.log");
   const stderrPath = options.stderrPath ?? join(stateDir, "stderr.log");
   try {
+    const native = nativeExecSettings(options);
+    const runStateDir = join(stateDir, "run");
+    if (native) mkdirSync(runStateDir, { mode: 0o700 });
     const timeoutSeconds = Math.max(1, Math.ceil(options.timeoutMs / 1_000));
-    writeFileSync(
-      configPath,
-      `${JSON.stringify(openclawConfig(options.env, timeoutSeconds, Boolean(options.checkoutInspection)))}\n`,
-      {
-        encoding: "utf8",
-        mode: 0o600,
-      },
-    );
+    const config = openclawConfig(options.env, timeoutSeconds, Boolean(options.checkoutInspection));
+    if (native) {
+      const agents = config.agents as Record<string, unknown>;
+      agents.defaults = {
+        ...(agents.defaults as Record<string, unknown>),
+        systemAgent: { agentId: native.agentId },
+      };
+      agents.entries = {
+        [native.agentId]: {
+          agentDir: native.agentDir,
+          model: { primary: options.model, fallbacks: [] },
+        },
+      };
+      config.auth = { order: { xai: [native.profileId] } };
+      config.plugins = { allow: ["xai"], slots: { memory: "none" } };
+    }
+    writeFileSync(configPath, `${JSON.stringify(config)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
     writeFileSync(promptPath, options.prompt, { encoding: "utf8", mode: 0o600 });
     const sessionId = openclawSessionId(options.label);
-    const args = [
-      "agent",
-      "--local",
-      "--agent",
-      "main",
-      "--session-id",
-      sessionId,
-      "--model",
-      options.model,
-      "--message-file",
-      promptPath,
-      "--timeout",
-      String(timeoutSeconds),
-      "--json",
-    ];
+    const args = native
+      ? [
+          "agent",
+          "exec",
+          "--config",
+          configPath,
+          "--cwd",
+          options.cwd,
+          "--state-dir",
+          runStateDir,
+          "--model",
+          options.model,
+          "--message-file",
+          promptPath,
+          "--timeout",
+          String(timeoutSeconds),
+          "--json",
+        ]
+      : [
+          "agent",
+          "--local",
+          "--agent",
+          "main",
+          "--session-id",
+          sessionId,
+          "--model",
+          options.model,
+          "--message-file",
+          promptPath,
+          "--timeout",
+          String(timeoutSeconds),
+          "--json",
+        ];
     const thinking = options.reasoningEffort?.trim();
     if (thinking) args.splice(args.length - 1, 0, "--thinking", thinking);
     // Deny-by-default: the embedded agent runs untrusted repository content
@@ -80,12 +117,14 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
     // through — mirroring the codex lane, which keeps OPENAI_API_KEY out of
     // subprocesses via its proxy auth mode.
     const childEnv: NodeJS.ProcessEnv = {
-      ...pickEnv(options.env, OPENCLAW_CHILD_ENV_ALLOWLIST),
+      ...(native
+        ? nativeExecEnvironment(options.env)
+        : pickEnv(options.env, OPENCLAW_CHILD_ENV_ALLOWLIST)),
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_WORKSPACE_DIR: options.cwd,
     };
-    if (!childEnv.OPENAI_API_KEY && options.env.CLAWSWEEPER_OPENCLAW_OPENAI_KEY) {
+    if (!native && !childEnv.OPENAI_API_KEY && options.env.CLAWSWEEPER_OPENCLAW_OPENAI_KEY) {
       childEnv.OPENAI_API_KEY = options.env.CLAWSWEEPER_OPENCLAW_OPENAI_KEY;
     }
     writeFileSync(
@@ -120,22 +159,94 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
     }
     const processResult = deserializeResult(JSON.parse(readFileSync(resultPath, "utf8")));
     if (worker.error) return { ...processResult, error: worker.error };
-    return normalizeOpenclawResult(
-      processResult,
-      readFileSync(stdoutPath, "utf8"),
-      options.checkoutInspection,
-      {
-        cwd: options.cwd,
-        // OpenClaw persists an explicit local session under this agent-owned
-        // path; inspect it before the isolated state directory is removed.
-        transcriptPath: join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
-      },
-    );
+    const completeStdout = readFileSync(stdoutPath, "utf8");
+    let normalizedStdout = completeStdout;
+    let nativeTranscript: string | undefined;
+    if (native && !processResult.error) {
+      if (parseOpenclawJsonEnvelope(completeStdout, processResult.stderr).failure) {
+        const failure = normalizeOpenclawResult(
+          { ...processResult, status: 0 },
+          completeStdout,
+          options.checkoutInspection,
+        );
+        return { ...failure, status: processResult.status || failure.status };
+      }
+      if (processResult.status !== 0) return processResult;
+      const envelope: unknown = JSON.parse(completeStdout);
+      if (
+        !isRecord(envelope) ||
+        envelope.ok !== true ||
+        envelope.status !== "ok" ||
+        envelope.provider !== "xai" ||
+        envelope.model !== options.model.slice(4) ||
+        typeof envelope.sessionId !== "string" ||
+        typeof envelope.final !== "string"
+      ) {
+        throw new Error("Native OpenClaw returned an unsuccessful or unexpected model envelope.");
+      }
+      // Native exec excludes commentary/reasoning and can recover a final
+      // answer from runtime metadata even when it emits no text payload.
+      normalizedStdout = JSON.stringify({ payloads: [{ text: envelope.final }] });
+      if (options.checkoutInspection)
+        nativeTranscript = readNativeOpenclawTranscript(
+          join(runStateDir, "agents", native.agentId, "agent", "openclaw-agent.sqlite"),
+          envelope.sessionId,
+        );
+    }
+    return normalizeOpenclawResult(processResult, normalizedStdout, options.checkoutInspection, {
+      cwd: options.cwd,
+      // OpenClaw persists an explicit local session under this agent-owned
+      // path; inspect it before the isolated state directory is removed.
+      transcriptPath: join(stateDir, "agents", "main", "sessions", `${sessionId}.jsonl`),
+      ...(nativeTranscript !== undefined ? { transcript: nativeTranscript } : {}),
+    });
   } catch (error) {
     return failedResult(error instanceof Error ? error : new Error(String(error)));
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
+}
+
+function nativeExecSettings(
+  options: OpenClawProcessOptions,
+): { agentId: string; agentDir: string; profileId: string } | undefined {
+  const flag = options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim();
+  if (!flag || flag === "0") return undefined;
+  if (flag !== "1") throw new Error("CLAWSWEEPER_OPENCLAW_NATIVE_EXEC must be 0 or 1.");
+  const agentId = options.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_ID?.trim().toLowerCase() ?? "";
+  const agentDir = options.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_DIR?.trim() ?? "";
+  const profileId = options.env.CLAWSWEEPER_OPENCLAW_AUTH_PROFILE_ID?.trim() ?? "";
+  if (
+    !options.model.startsWith("xai/") ||
+    options.env.CLAWSWEEPER_OPENCLAW_PROVIDERS_JSON?.trim() ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(agentId) ||
+    !isAbsolute(agentDir) ||
+    !/^xai:[a-zA-Z0-9@._+-]+$/.test(profileId)
+  ) {
+    throw new Error(
+      "Native exec requires an xAI model, explicit auth agent id, absolute auth agent directory, and xAI profile id; custom provider blocks are unsupported.",
+    );
+  }
+  assertExclusiveNativeXaiProfile(join(agentDir, "openclaw-agent.sqlite"), profileId);
+  return { agentId, agentDir, profileId };
+}
+
+function nativeExecEnvironment(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = {};
+  for (const name of [
+    "PATH",
+    "HOME",
+    "USER",
+    "SHELL",
+    "LANG",
+    "LC_ALL",
+    "TMPDIR",
+    "TERM",
+    "NO_COLOR",
+  ]) {
+    if (env[name] !== undefined) result[name] = env[name];
+  }
+  return result;
 }
 
 export function parseOpenclawJsonEnvelope(
@@ -228,7 +339,7 @@ function normalizeOpenclawResult(
   processResult: CodexProcessResult,
   completeStdout: string,
   checkoutInspection?: { expectedText: string; expectedPath: string },
-  receipt?: { cwd: string; transcriptPath: string },
+  receipt?: { cwd: string; transcriptPath: string; transcript?: string },
 ): CodexProcessResult {
   if (processResult.error || processResult.status !== 0) return processResult;
   const parsed = parseOpenclawJsonEnvelope(completeStdout, processResult.stderr);
@@ -265,11 +376,12 @@ function normalizeOpenclawResult(
 function hasSuccessfulReadReceipt(options: {
   cwd: string;
   transcriptPath: string;
+  transcript?: string;
   expectedPath: string;
 }): boolean {
   let transcript: string;
   try {
-    transcript = readFileSync(options.transcriptPath, "utf8");
+    transcript = options.transcript ?? readFileSync(options.transcriptPath, "utf8");
   } catch {
     return false;
   }

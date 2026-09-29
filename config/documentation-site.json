@@ -31,6 +31,7 @@
         "github-webhook-read-model.md",
         "operator-configuration.md",
         "private-inference.md",
+        "native-xai-review.md",
         "live-dashboard.md",
         "openclaw-bay-demo.md",
         "openclaw-event-hooks.md",

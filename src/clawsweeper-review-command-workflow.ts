@@ -1463,7 +1463,7 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
         try {
           if (humanLocalReview) {
             console.error("");
-            console.error("Running Codex review");
+            console.error(reviewEnv.CLAWSWEEPER_RUNNER === "openclaw" ? "Running OpenClaw review" : "Running Codex review");
             console.error(`  timeout: ${displayDurationMs(timeoutMs)}`);
             if (outputSelection.retention === "none") {
               console.error("  retained output: none");
