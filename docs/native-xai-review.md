@@ -104,3 +104,18 @@ Native reviews expose `read` directly with tool search disabled. Full-review
 prompts state the actual read-only capabilities; checkout challenges retain
 their exact-line instructions. This avoids unavailable-tool loops observed in
 a live Grok run. A direct-read canary again confirmed outside reads are blocked.
+
+Native full reviews forward the scanned `--output-schema` into OpenClaw's
+per-model `response_format` as strict JSON Schema. Prompt text alone had allowed
+extra model-generated decision fields, which the existing parser correctly
+rejected. Checkout challenges receive no response schema, and downstream
+validation is unchanged. A real Horizon OAuth probe on Arc Haven returned
+`{"receipt_7ae39":"schema-reached-provider"}` even though its prompt requested a
+plain word; that property and value were supplied only through the schema.
+Evidence is retained privately under `/tmp/horizon-schema-proof/`. A separate
+full-review run exercises the full decision schema; the small probe alone does
+not establish compatibility with every schema keyword.
+
+A second real OAuth probe also accepted the Draft 2020-12 declaration, `const`
+and `pattern`, retaining the same constrained result. Those keywords are
+supported by xAI and are preserved; no validator constraints are removed.

@@ -38,6 +38,7 @@ export interface OpenClawProcessOptions {
   stdoutPath?: string;
   stderrPath?: string;
   checkoutInspection?: { expectedText: string; expectedPath: string };
+  outputSchema?: Record<string, unknown>;
 }
 
 export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProcessResult {
@@ -65,6 +66,24 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
       agents.defaults = {
         ...(agents.defaults as Record<string, unknown>),
         systemAgent: { agentId: native.agentId },
+        ...(options.outputSchema && !options.checkoutInspection
+          ? {
+              models: {
+                [options.model]: {
+                  params: {
+                    response_format: {
+                      type: "json_schema",
+                      json_schema: {
+                        name: "clawsweeper_review",
+                        strict: true,
+                        schema: options.outputSchema,
+                      },
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
       };
       agents.entries = {
         [native.agentId]: {

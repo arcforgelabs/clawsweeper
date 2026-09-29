@@ -121,6 +121,9 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
   const rawResult = runOpenclawProcess({
     label: options.label,
     prompt: options.prompt,
+    ...(schemaPath && options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1"
+      ? { outputSchema: JSON.parse(readFileSync(schemaPath, "utf8")) }
+      : {}),
     model,
     ...(options.reasoningEffort?.trim() ? { reasoningEffort: options.reasoningEffort.trim() } : {}),
     cwd: options.cwd,

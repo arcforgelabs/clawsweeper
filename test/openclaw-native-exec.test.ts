@@ -19,6 +19,8 @@ import {
   readNativeOpenclawTranscript,
 } from "../dist/openclaw-native-transcript.js";
 import { runOpenclawProcess } from "../dist/openclaw-process.js";
+import { runAgentProcess } from "../dist/agent-runner.js";
+import { useFakeScanner } from "./agent-input-scan-helpers.ts";
 
 const profile = "xai:review@example.test";
 function authStore(root: string): string {
@@ -133,7 +135,8 @@ test("native OAuth account guard refuses other accounts, API keys, and fallback 
   }
 });
 
-test("native exec uses isolated state and saved OAuth, and preserves exact-path compressed read validation", () => {
+test("native exec uses isolated state and saved OAuth, and preserves exact-path compressed read validation", (t) => {
+  useFakeScanner(t);
   for (const variant of [
     "success",
     "full-review",
@@ -178,7 +181,25 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
 `,
       );
       chmodSync(binary, 0o755);
-      const output = runOpenclawProcess({
+      const run =
+        variant === "full-review"
+          ? (options: Parameters<typeof runOpenclawProcess>[0]) => {
+              const schemaPath = join(root, "output-schema.json");
+              writeFileSync(schemaPath, JSON.stringify(options.outputSchema));
+              const { outputSchema, ...rest } = options;
+              return runAgentProcess({
+                ...rest,
+                env: {
+                  ...rest.env,
+                  CLAWSWEEPER_RUNNER: "openclaw",
+                  CLAWSWEEPER_OPENCLAW_MODEL: "xai/grok-4.7",
+                },
+                scanSource: { kind: "prompt" },
+                codexExtraArgs: ["--output-schema", schemaPath],
+              });
+            }
+          : runOpenclawProcess;
+      const output = run({
         label: "native-test",
         prompt: "Read proof.txt",
         model: "xai/grok-4.7",
@@ -196,7 +217,14 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
           OPENCLAW_GATEWAY_TOKEN: "must-not-pass",
         },
         ...(variant === "full-review"
-          ? {}
+          ? {
+              outputSchema: {
+                type: "object",
+                properties: { result: { type: "string" } },
+                required: ["result"],
+                additionalProperties: false,
+              },
+            }
           : { checkoutInspection: { expectedText: "expected-line", expectedPath: "proof.txt" } }),
       });
       if (!["success", "full-review", "commentary", "final-only"].includes(variant))
@@ -220,6 +248,12 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
       assert.deepEqual(record.config.plugins.allow, ["xai"]);
       assert.deepEqual(record.config.tools.allow, ["read"]);
       assert.equal(record.config.tools.toolSearch, false);
+      const schemaParams = record.config.agents.defaults.models?.["xai/grok-4.7"]?.params;
+      if (variant === "full-review") {
+        assert.equal(schemaParams.response_format.type, "json_schema");
+        assert.equal(schemaParams.response_format.json_schema.strict, true);
+        assert.deepEqual(schemaParams.response_format.json_schema.schema.required, ["result"]);
+      } else assert.equal(schemaParams, undefined);
       assert.equal(record.config.tools.fs.workspaceOnly, true);
       assert.equal(record.config.tools.exec.mode, "deny");
       assert.equal(existsSync(record.state), false);
