@@ -121,6 +121,9 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
   const rawResult = runOpenclawProcess({
     label: options.label,
     prompt: options.prompt,
+    ...(schemaPath && options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1"
+      ? { outputSchema: JSON.parse(readFileSync(schemaPath, "utf8")) }
+      : {}),
     model,
     ...(options.reasoningEffort?.trim() ? { reasoningEffort: options.reasoningEffort.trim() } : {}),
     cwd: options.cwd,
@@ -219,7 +222,15 @@ export function runAgentCheckoutInspection(options: {
       model: openclawModel(env),
       cwd: options.cwd,
       env,
-      timeoutMs: Math.min(remainingMs(), 30_000),
+      // Native startup includes provider and SQLite initialization. Keep the
+      // challenge bounded by the overall review budget without a fragile 30s cap.
+      timeoutMs: Math.min(
+        remainingMs(),
+        options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1" ? 90_000 : 30_000,
+      ),
+      ...(options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1"
+        ? { reasoningEffort: "low" }
+        : {}),
       checkoutInspection: { expectedText: challenge.text, expectedPath: challenge.path },
     });
   }
