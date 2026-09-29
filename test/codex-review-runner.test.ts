@@ -6,12 +6,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { TRUFFLEHOG_VERSION } from "../dist/review-tool-bootstrap.js";
@@ -686,6 +688,217 @@ process.stdout.write(JSON.stringify({ payloads: [{ text }], meta: { stopReason: 
       /exact challenged path/,
     );
     assert.equal(readFileSync(invocationsPath, "utf8"), "1");
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("native checkout validation failure survives auth-bookkeeping stderr", () => {
+  const root = mkdtempSync(tmpPrefix);
+  const openclawDir = join(root, "openclaw");
+  const workDir = join(root, "review-work");
+  const recordPath = join(root, "record.json");
+  const authDir = join(root, "auth");
+  const profile = "xai:review@example.test";
+  const itemNumber = 83421;
+  const secretToken = "sk-proj-abcdefghijklmnopqrst";
+  const sentinels = [
+    "session-secret-value",
+    "TOOL_OUTPUT_SENTINEL",
+    "PRIVATE_REASONING_SENTINEL",
+    "ERROR_VALUE_SENTINEL",
+    secretToken,
+    "tracked checkout content",
+    "wrong.txt",
+    profile,
+    "must-not-pass",
+    "Use the read tool",
+    "auth-success",
+  ];
+  mkdirSync(openclawDir, { recursive: true });
+  mkdirSync(authDir, { recursive: true });
+  initTrackedRepo(openclawDir);
+  const authDb = new DatabaseSync(join(authDir, "auth.sqlite"));
+  authDb.exec(
+    "CREATE TABLE auth_profile_store (store_json TEXT); CREATE TABLE auth_profile_state (state_json TEXT)",
+  );
+  authDb
+    .prepare("INSERT INTO auth_profile_store VALUES (?)")
+    .run(JSON.stringify({ profiles: { [profile]: { provider: "xai", type: "oauth" } } }));
+  authDb
+    .prepare("INSERT INTO auth_profile_state VALUES (?)")
+    .run(JSON.stringify({ order: { xai: [profile] } }));
+  authDb.close();
+  renameSync(join(authDir, "auth.sqlite"), join(authDir, "openclaw-agent.sqlite"));
+  const openclawPath = join(root, "fake-openclaw");
+  writeFileSync(
+    openclawPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const { DatabaseSync } = require("node:sqlite");
+const { zstdCompressSync } = require("node:zlib");
+const args = process.argv.slice(2);
+const arg = (name) => args[args.indexOf(name) + 1];
+const state = arg("--state-dir");
+const prompt = fs.readFileSync(arg("--message-file"), "utf8");
+const relativePath = JSON.parse(prompt.match(/^Path: (.+)$/m)[1]);
+const challenged = fs.readFileSync(path.join(process.env.OPENCLAW_WORKSPACE_DIR, relativePath), "utf8").trim();
+fs.writeFileSync(${JSON.stringify(recordPath)}, JSON.stringify({
+  state,
+  ambient: process.env.OPENCLAW_STATE_DIR,
+  key: process.env.XAI_API_KEY ?? null,
+  prompt,
+}));
+const dbPath = path.join(state, "agents", "reviewer", "agent", "openclaw-agent.sqlite");
+fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+const db = new DatabaseSync(dbPath);
+db.exec("CREATE TABLE transcript_events (session_id TEXT, seq INTEGER, event_json TEXT, event_zstd BLOB, event_utf8_bytes INTEGER)");
+const sessionId = "session-secret-value";
+const entries = [
+  { type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "one", name: "read", arguments: { path: "wrong.txt" } }] } },
+  { type: "message", message: { role: "toolResult", toolName: "read", toolCallId: "one", isError: false, content: [{ type: "text", text: "TOOL_OUTPUT_SENTINEL" }] } },
+];
+entries.forEach((entry, index) => {
+  const bytes = Buffer.from(JSON.stringify(entry));
+  db.prepare("INSERT INTO transcript_events VALUES (?, ?, ?, ?, ?)").run(sessionId, index + 1, null, zstdCompressSync(bytes), bytes.length);
+});
+db.close();
+process.stderr.write("auth-success bookkeeping warning ${secretToken}\\n");
+process.stdout.write(JSON.stringify({
+  ok: true,
+  status: "ok",
+  provider: "xai",
+  model: "grok-4.7",
+  sessionId,
+  final: challenged,
+  meta: { reasoning: "PRIVATE_REASONING_SENTINEL", authError: "ERROR_VALUE_SENTINEL" },
+}));
+`,
+  );
+  chmodSync(openclawPath, 0o755);
+  const previous = {
+    PATH: process.env.PATH,
+    CLAWSWEEPER_RUNNER: process.env.CLAWSWEEPER_RUNNER,
+    CLAWSWEEPER_OPENCLAW_BIN: process.env.CLAWSWEEPER_OPENCLAW_BIN,
+    CLAWSWEEPER_OPENCLAW_MODEL: process.env.CLAWSWEEPER_OPENCLAW_MODEL,
+    CLAWSWEEPER_OPENCLAW_NATIVE_EXEC: process.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC,
+    CLAWSWEEPER_OPENCLAW_AUTH_AGENT_ID: process.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_ID,
+    CLAWSWEEPER_OPENCLAW_AUTH_AGENT_DIR: process.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_DIR,
+    CLAWSWEEPER_OPENCLAW_AUTH_PROFILE_ID: process.env.CLAWSWEEPER_OPENCLAW_AUTH_PROFILE_ID,
+    CLAWSWEEPER_OPENCLAW_PROVIDERS_JSON: process.env.CLAWSWEEPER_OPENCLAW_PROVIDERS_JSON,
+    XAI_API_KEY: process.env.XAI_API_KEY,
+    CODEX_BIN: process.env.CODEX_BIN,
+  };
+  process.env.PATH = `${join(root, "bin")}${delimiter}${process.env.PATH ?? ""}`;
+  process.env.CLAWSWEEPER_RUNNER = "openclaw";
+  process.env.CLAWSWEEPER_OPENCLAW_BIN = openclawPath;
+  process.env.CLAWSWEEPER_OPENCLAW_MODEL = "xai/grok-4.7";
+  process.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC = "1";
+  process.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_ID = "Reviewer";
+  process.env.CLAWSWEEPER_OPENCLAW_AUTH_AGENT_DIR = authDir;
+  process.env.CLAWSWEEPER_OPENCLAW_AUTH_PROFILE_ID = profile;
+  delete process.env.CLAWSWEEPER_OPENCLAW_PROVIDERS_JSON;
+  process.env.XAI_API_KEY = "must-not-pass";
+  process.env.CODEX_BIN = join(root, "missing-codex");
+  const diagnosticPath = join(workDir, `${itemNumber}.native-checkout-inspection.json`);
+  try {
+    let caught: (Error & { stderr?: string; stdout?: string; status?: number | null }) | undefined;
+    assert.throws(
+      () =>
+        runBoundedCodexForTest({
+          item: item({ number: itemNumber }),
+          context: { issue: {}, comments: [], timeline: [] },
+          git: { mainSha: "abc123", latestRelease: null },
+          model: "internal",
+          openclawDir,
+          reasoningEffort: "high",
+          sandboxMode: "read-only",
+          serviceTier: "",
+          timeoutMs: 10_000,
+          workDir,
+          prompt: "Return a review decision.",
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        caught = error as Error & { stderr?: string; stdout?: string; status?: number | null };
+        return true;
+      },
+    );
+    assert.ok(caught);
+    assert.match(
+      caught.message,
+      /Read-only checkout inspection failed for #83421: OpenClaw checkout inspection did not read the exact challenged path\./,
+    );
+    assert.doesNotMatch(caught.message, /auth-success|sk-proj|ERROR_VALUE_SENTINEL|session-secret/);
+    assert.equal(caught.status, 1);
+    assert.match(caught.stderr ?? "", /auth-success bookkeeping warning/);
+    assert.match(caught.stderr ?? "", /\[REDACTED_OPENAI_KEY\]/);
+    assert.doesNotMatch(caught.stderr ?? "", /sk-proj-abcdefghijklmnopqrst/);
+    assert.equal(caught.stdout ?? "", "");
+    const decision = reportedReviewFailure(caught);
+    const failureDetail = decision.evidence.find((entry) => entry.label === "codex failure detail");
+    const stderrDetail = decision.evidence.find((entry) => entry.label === "codex stderr");
+    const stdoutDetail = decision.evidence.find((entry) => entry.label === "codex stdout");
+    assert.match(failureDetail?.detail ?? "", /exact challenged path/);
+    assert.doesNotMatch(failureDetail?.detail ?? "", /auth-success/);
+    assert.match(stderrDetail?.detail ?? "", /auth-success bookkeeping/);
+    assert.match(stdoutDetail?.detail ?? "", /No stdout/);
+    assert.equal(decision.checkoutInspectionFailed, true);
+    assert.match(decision.summary, /exit 1/);
+    const record = JSON.parse(readFileSync(recordPath, "utf8")) as {
+      state: string;
+      ambient: string;
+      key: string | null;
+      prompt: string;
+    };
+    assert.equal(record.key, null);
+    assert.equal(existsSync(record.state), false);
+    assert.equal(existsSync(record.ambient), false);
+    assert.equal(existsSync(diagnosticPath), true);
+    assert.equal(statSync(diagnosticPath).mode & 0o777, 0o600);
+    const diagnosticText = readFileSync(diagnosticPath, "utf8");
+    for (const sentinel of [...sentinels, record.state, record.ambient, record.prompt]) {
+      assert.equal(diagnosticText.includes(sentinel), false, sentinel);
+    }
+    const diagnostic = JSON.parse(diagnosticText) as {
+      version: number;
+      raw: { status: number | null; signal: string | null; errorKind: string | null };
+      stdoutBytes: number;
+      envelope: {
+        parsed: boolean;
+        ok: boolean | null;
+        status: string | null;
+        provider: string | null;
+        model: string | null;
+        finalPresent: boolean;
+      };
+      normalized: { status: number | null; validationFailure: string | null };
+      receipt: string | null;
+      sessionId?: string;
+    };
+    assert.equal(diagnostic.version, 1);
+    assert.equal(diagnostic.raw.status, 0);
+    assert.equal(diagnostic.raw.signal, null);
+    assert.equal(diagnostic.raw.errorKind, null);
+    assert.ok(diagnostic.stdoutBytes > 0);
+    assert.equal(diagnostic.envelope.parsed, true);
+    assert.equal(diagnostic.envelope.ok, true);
+    assert.equal(diagnostic.envelope.status, "ok");
+    assert.equal(diagnostic.envelope.provider, "xai");
+    assert.equal(diagnostic.envelope.model, "grok-4.7");
+    assert.equal(diagnostic.envelope.finalPresent, true);
+    assert.equal(diagnostic.normalized.status, 1);
+    assert.equal(
+      diagnostic.normalized.validationFailure,
+      "OpenClaw checkout inspection did not read the exact challenged path.",
+    );
+    assert.equal(diagnostic.receipt, "mismatch");
+    assert.equal(diagnostic.sessionId, undefined);
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

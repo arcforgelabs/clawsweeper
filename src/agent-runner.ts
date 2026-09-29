@@ -8,8 +8,25 @@ import {
   type CodexAppServerProcessOptions,
   type CodexProcessResult,
 } from "./codex-process.js";
-import { runOpenclawProcess } from "./openclaw-process.js";
+import {
+  nativeCheckoutDiagnosticPath,
+  NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES,
+  runOpenclawProcess,
+} from "./openclaw-process.js";
 import { AgentInputScanError, scanAgentInput, type AgentScanSource } from "./agent-input-scan.js";
+
+export { nativeCheckoutDiagnosticPath, NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES };
+
+export function nativeCheckoutDiagnosticPathForEnv(
+  workDir: string,
+  itemNumber: number,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  if (agentRunner(env) !== "openclaw" || env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() !== "1") {
+    return undefined;
+  }
+  return nativeCheckoutDiagnosticPath(workDir, itemNumber);
+}
 
 export type AgentRunner = "codex" | "openclaw";
 
@@ -168,6 +185,7 @@ export function runAgentCheckoutInspection(options: {
   scanSource: AgentScanSource;
   initialPrompt: string;
   schemaPath?: string;
+  checkoutDiagnosticPath?: string;
 }): CodexProcessResult {
   const deadlineAt = Date.now() + options.timeoutMs;
   const remainingMs = () => {
@@ -232,6 +250,9 @@ export function runAgentCheckoutInspection(options: {
         ? { reasoningEffort: "low" }
         : {}),
       checkoutInspection: { expectedText: challenge.text, expectedPath: challenge.path },
+      ...(options.checkoutDiagnosticPath
+        ? { checkoutDiagnosticPath: options.checkoutDiagnosticPath }
+        : {}),
     });
   }
   scanAgentInput({

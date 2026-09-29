@@ -13,7 +13,11 @@ import {
 import { ACTION_EVENT_REASON_CODES, ACTION_EVENT_STATUSES } from "./action-ledger.js";
 import { AgentInputScanError, agentInputScanFailureExitCode } from "./agent-input-scan.js";
 import { serializeReviewContext } from "./agent-input-scan-fixtures.js";
-import { reviewNetworkCapability } from "./agent-runner.js";
+import {
+  nativeCheckoutDiagnosticPathForEnv,
+  NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES,
+  reviewNetworkCapability,
+} from "./agent-runner.js";
 import type { Args } from "./clawsweeper-args.js";
 import {
   isBulkFilerExemptRepositoryPermission as isVerifiedMaintainerRepositoryPermission,
@@ -552,6 +556,11 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
             const baseSha = context
               ? asRecord(asRecord(context.pullRequest).base).sha
               : structuralScanIdentity?.headSha === headSha ? structuralScanIdentity.baseSha : "";
+            const checkoutDiagnosticPath = nativeCheckoutDiagnosticPathForEnv(
+              codexWorkDir,
+              item.number,
+            );
+            if (checkoutDiagnosticPath) ensureDir(codexWorkDir);
             const inspection = runReviewCheckoutInspection({
               // Structural reuse has no model payload. Hydrated reuse scans the
               // current context too, including source comments.
@@ -573,6 +582,7 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
               openclawDir: reviewOpenclawDir,
               preserveCodexAuth: localOnly,
               timeoutMs,
+              ...(checkoutDiagnosticPath ? { checkoutDiagnosticPath } : {}),
             });
             cachePreflightState =
               !inspection.error && inspection.status === 0 ? "passed" : "failed";
@@ -1476,13 +1486,18 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
               );
             }
           }
+          const checkoutDiagnosticPath = nativeCheckoutDiagnosticPathForEnv(codexWorkDir, item.number);
           decision = produceReviewOutput(outputBudget, {
             paths: [
-              "prompt.md", "json", "1.codex.stdout.log", "1.codex.stderr.log", "review-thread.json",
-            ].map((suffix) => join(codexWorkDir, `${item.number}.${suffix}`)),
+              ...["prompt.md", "json", "1.codex.stdout.log", "1.codex.stderr.log", "review-thread.json"].map(
+                (suffix) => join(codexWorkDir, `${item.number}.${suffix}`),
+              ),
+              ...(checkoutDiagnosticPath ? [checkoutDiagnosticPath] : []),
+            ],
             maxBytes: itemOutputBudget.promptFileBytes + itemOutputBudget.resultFileBytes +
-              itemOutputBudget.streamFileBytes * 2 + itemOutputBudget.threadStateBytes,
-            maxFiles: 5,
+              itemOutputBudget.streamFileBytes * 2 + itemOutputBudget.threadStateBytes +
+              (checkoutDiagnosticPath ? NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES : 0),
+            maxFiles: checkoutDiagnosticPath ? 6 : 5,
           }, () => runCodex({
             item,
             context,

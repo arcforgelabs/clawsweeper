@@ -327,6 +327,7 @@ export interface CreateReviewCommandWorkflowDependencies {
     openclawDir: string;
     preserveCodexAuth?: boolean;
     timeoutMs: number;
+    checkoutDiagnosticPath?: string;
   }) => CodexProcessResult;
   runCodex: (options: {
     item: Item;
