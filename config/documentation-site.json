@@ -32,6 +32,7 @@
         "operator-configuration.md",
         "private-inference.md",
         "native-xai-review.md",
+        "arcforge-gateway-queue.md",
         "live-dashboard.md",
         "openclaw-bay-demo.md",
         "openclaw-event-hooks.md",
