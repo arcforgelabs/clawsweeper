@@ -8,6 +8,7 @@ import {
   type CodexAppServerProcessOptions,
   type CodexProcessResult,
 } from "./codex-process.js";
+import { gatewayReviewEnabled, requireGatewayReviewSettings } from "./openclaw-gateway-review.js";
 import {
   nativeCheckoutDiagnosticPath,
   NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES,
@@ -22,7 +23,8 @@ export function nativeCheckoutDiagnosticPathForEnv(
   itemNumber: number,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  if (agentRunner(env) !== "openclaw" || env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() !== "1") {
+  if (agentRunner(env) !== "openclaw") return undefined;
+  if (!gatewayReviewEnabled(env) && env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() !== "1") {
     return undefined;
   }
   return nativeCheckoutDiagnosticPath(workDir, itemNumber);
@@ -79,7 +81,9 @@ export function reviewNetworkCapability(
 export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessResult {
   if (options.diagnosticPromptPath) rmSync(options.diagnosticPromptPath, { force: true });
   const runner = agentRunner(options.env);
-  if (runner === "openclaw") openclawModel(options.env);
+  const gateway = runner === "openclaw" && gatewayReviewEnabled(options.env);
+  if (gateway) requireGatewayReviewSettings(options.env);
+  if (runner === "openclaw" && !gateway) openclawModel(options.env);
   const startedAt = Date.now();
   const outputPath = codexOutputLastMessagePath(options.codexExtraArgs);
   if (
@@ -134,15 +138,18 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
     });
   }
 
-  const model = openclawModel(options.env);
+  const model = gateway ? "gateway-agent-config" : openclawModel(options.env);
+  const nativeExec = options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1";
   const rawResult = runOpenclawProcess({
     label: options.label,
     prompt: options.prompt,
-    ...(schemaPath && options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1"
+    ...(schemaPath && (gateway || nativeExec)
       ? { outputSchema: JSON.parse(readFileSync(schemaPath, "utf8")) }
       : {}),
     model,
-    ...(options.reasoningEffort?.trim() ? { reasoningEffort: options.reasoningEffort.trim() } : {}),
+    ...(!gateway && options.reasoningEffort?.trim()
+      ? { reasoningEffort: options.reasoningEffort.trim() }
+      : {}),
     cwd: options.cwd,
     env: options.env,
     timeoutMs: options.timeoutMs,
@@ -151,7 +158,7 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
     ...(options.stdoutPath ? { stdoutPath: options.stdoutPath } : {}),
     ...(options.stderrPath ? { stderrPath: options.stderrPath } : {}),
   });
-  const result = redactOpenclawFailure(rawResult, model);
+  const result = redactOpenclawFailure(rawResult, gateway ? "" : model);
   if (!result.error && result.status === 0 && outputPath) {
     if (
       options.outputLastMessageBytes !== undefined &&
@@ -234,21 +241,18 @@ export function runAgentCheckoutInspection(options: {
       ...(options.schemaPath ? { schemaPath: options.schemaPath } : {}),
       additionalBytes: [Buffer.from(prompt), readFileSync(join(options.cwd, challenge.path))],
     });
+    const gateway = gatewayReviewEnabled(env);
+    const native = options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1";
     return runOpenclawProcess({
       label: "checkout-inspection",
       prompt,
-      model: openclawModel(env),
+      model: gateway ? "gateway-agent-config" : openclawModel(env),
       cwd: options.cwd,
       env,
-      // Native startup includes provider and SQLite initialization. Keep the
-      // challenge bounded by the overall review budget without a fragile 30s cap.
-      timeoutMs: Math.min(
-        remainingMs(),
-        options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1" ? 90_000 : 30_000,
-      ),
-      ...(options.env.CLAWSWEEPER_OPENCLAW_NATIVE_EXEC?.trim() === "1"
-        ? { reasoningEffort: "low" }
-        : {}),
+      // Native and gateway startup include provider and session initialization.
+      // Keep the challenge bounded by the overall review budget.
+      timeoutMs: Math.min(remainingMs(), gateway || native ? 90_000 : 30_000),
+      ...(native && !gateway ? { reasoningEffort: "low" } : {}),
       checkoutInspection: { expectedText: challenge.text, expectedPath: challenge.path },
       ...(options.checkoutDiagnosticPath
         ? { checkoutDiagnosticPath: options.checkoutDiagnosticPath }
@@ -386,8 +390,10 @@ function spawnResult(result: ReturnType<typeof spawnSync>): CodexProcessResult {
 }
 
 function redactOpenclawFailure(result: CodexProcessResult, model: string): CodexProcessResult {
-  const redact = (value: string): string =>
-    redactInternalCodexModel(value).replaceAll(model, "[REDACTED_INTERNAL_MODEL]");
+  const redact = (value: string): string => {
+    const redacted = redactInternalCodexModel(value);
+    return model ? redacted.replaceAll(model, "[REDACTED_INTERNAL_MODEL]") : redacted;
+  };
   const failed = Boolean(result.error) || result.status !== 0;
   return {
     ...result,
