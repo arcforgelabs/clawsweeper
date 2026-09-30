@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') }}
     steps:
-      - uses: actions/checkout@v4
+      # Full commit SHA. This org rejects a floating tag such as @v4.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Read pull request body
         env:
