@@ -899,6 +899,37 @@ process.stdout.write(JSON.stringify({
     );
     assert.equal(diagnostic.receipt, "mismatch");
     assert.equal(diagnostic.sessionId, undefined);
+    // A syntactically token-like string is not automatically safe metadata.
+    // Unexpected envelope fields must be represented by presence, not copied.
+    writeFileSync(
+      openclawPath,
+      readFileSync(openclawPath, "utf8")
+        .replace('status: "ok",', 'status: "STATUS_SECRET",')
+        .replace('provider: "xai",', 'provider: "PROVIDER_SECRET",')
+        .replace('model: "grok-4.7",', 'model: "MODEL_SECRET",'),
+    );
+    assert.throws(() =>
+      runBoundedCodexForTest({
+        item: item({ number: itemNumber }),
+        context: { issue: {}, comments: [], timeline: [] },
+        git: { mainSha: "abc123", latestRelease: null },
+        model: "internal",
+        openclawDir,
+        reasoningEffort: "high",
+        sandboxMode: "read-only",
+        serviceTier: "",
+        timeoutMs: 10_000,
+        workDir,
+        prompt: "Return a review decision.",
+      }),
+    );
+    const unexpectedText = readFileSync(diagnosticPath, "utf8");
+    assert.doesNotMatch(unexpectedText, /STATUS_SECRET|PROVIDER_SECRET|MODEL_SECRET/);
+    const unexpected = JSON.parse(unexpectedText);
+    for (const field of ["status", "provider", "model"]) {
+      assert.equal(unexpected.envelope[field], null);
+      assert.equal(unexpected.envelope[`${field}Present`], true);
+    }
   } finally {
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];

@@ -242,13 +242,14 @@ test("per-item budgets stay within their aggregate pools", () => {
       threadStateBytes: 1024,
       mediaDownloadBytes: 32 * 1024 * 1024,
       mediaDerivedBytes: 8 * 1024 * 1024,
-      metadataBytes: 4 * 1024 * 1024 - 1024,
+      metadataBytes: 4 * 1024 * 1024 - 1024 - 2048,
       reportsBytes: 16 * 1024 * 1024,
     });
     assert.equal(
       transient.streamFileBytes * 2 +
         transient.resultFileBytes +
         transient.threadStateBytes +
+        2048 +
         transient.reportsBytes +
         transient.mediaDownloadBytes +
         transient.mediaDerivedBytes +
@@ -365,7 +366,8 @@ test("sequential debug media shares remaining bytes and files before curl or ffm
         (item.promptFileBytes +
           item.resultFileBytes +
           item.streamFileBytes * 2 +
-          item.threadStateBytes) +
+          item.threadStateBytes +
+          2048) +
       item.metadataBytes +
       item.reportsBytes;
     truncateSync(existing, 1024 * 1024 * 1024 - reserved - 100);
@@ -551,6 +553,7 @@ test("64-item none, summary, and debug runs respect live file peaks and preserve
           "1.codex.stdout.log",
           "1.codex.stderr.log",
           "review-thread.json",
+          "native-checkout-inspection.json",
         ]) {
           writeFileSync(join(codexWorkDir, `${itemNumber}.${suffix}`), `${suffix}\n`);
         }
@@ -582,7 +585,7 @@ test("64-item none, summary, and debug runs respect live file peaks and preserve
       assert.ok(evidence.every((digest) => /^[0-9a-f]{64}$/.test(digest)));
       assert.equal(
         countFiles(root),
-        retention === "none" ? 7 : retention === "summary" ? 7 + 1 + 64 : 7 + 64 * 21,
+        retention === "none" ? 7 : retention === "summary" ? 7 + 1 + 64 : 7 + 64 * 22,
       );
       if (retention !== "debug") assert.equal(existsSync(join(root, "codex")), false);
     }
