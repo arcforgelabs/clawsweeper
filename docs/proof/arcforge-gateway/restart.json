@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "provider": "local-node-sqlite-http",
+  "workers": 5,
+  "expiry_ms": 120000,
+  "old_owner_status": 409,
+  "publication_receipt_survives_restart": true,
+  "limits": "Synthetic upstream claims; GitHub dispatch and xAI inference require live canary.",
+  "source_sha256": "3e78e417d7e20159e75052410cf05d6f45052e73a73b1cf848776e614a1e1d3c",
+  "command": "node scripts/arcforge/gateway-execution-proof.mjs"
+}

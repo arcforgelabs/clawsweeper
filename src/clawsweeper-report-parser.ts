@@ -634,7 +634,10 @@ export function createReportParser({
     }
     const section = reviewSectionValue(markdown, "realBehaviorProof");
     if (!section.trim()) {
-      if (isExternalPullRequestReport(markdown)) {
+      if (
+        isExternalPullRequestReport(markdown) ||
+        globalThis.process?.env?.CLAWSWEEPER_FORMAL_REVIEW === "1"
+      ) {
         return {
           status: "missing",
           summary:
@@ -675,6 +678,7 @@ export function createReportParser({
     if (
       frontMatterValue(markdown, "type") !== "pull_request" ||
       isExternalPullRequestReport(markdown) ||
+      globalThis.process?.env?.CLAWSWEEPER_FORMAL_REVIEW === "1" ||
       authorityChainProofRequired ||
       (!proof.needsContributorAction &&
         proof.status !== "missing" &&

@@ -14,7 +14,10 @@ export type GitHubRateLimitHint = {
   authoritative: boolean;
 };
 
-export type HostedPublicTargetProbe = "public" | "terminal" | "retryable";
+export type HostedPublicTargetProbe = "public" | "private" | "terminal" | "retryable";
+export function hostedTargetIsAdmitted(value: HostedTargetAdmission | undefined): boolean {
+  return value?.outcome === "public" || value?.outcome === "private";
+}
 export type HostedTargetAdmission = {
   outcome: HostedPublicTargetProbe;
   retryAt?: number;
@@ -160,6 +163,7 @@ export async function probeHostedPublicTarget(
   reader: typeof fetch = fetch,
   options: {
     apiUrl?: (path: string) => string;
+    allowPrivate?: boolean;
   } = {},
 ): Promise<HostedTargetAdmission> {
   const normalized = targetRepo.trim().toLowerCase();
@@ -198,6 +202,14 @@ export async function probeHostedPublicTarget(
     ) {
       return hostedTargetRetryableAdmission(response);
     }
+    if (
+      observedName === normalized &&
+      repository.private === true &&
+      (visibility === "private" || visibility === "internal") &&
+      options.allowPrivate === true
+    ) {
+      return { outcome: "private" };
+    }
     return observedName === normalized && !repository.private && visibility === "public"
       ? { outcome: "public" }
       : { outcome: "terminal" };
@@ -207,12 +219,17 @@ export async function probeHostedPublicTarget(
 }
 
 export function normalizeHostedTargetAdmission(value: unknown): HostedTargetAdmission {
-  if (value === "public" || value === "terminal" || value === "retryable") {
+  if (value === "public" || value === "private" || value === "terminal" || value === "retryable") {
     return { outcome: value };
   }
   const record = objectValue(value);
   const outcome = record.outcome;
-  if (outcome !== "public" && outcome !== "terminal" && outcome !== "retryable") {
+  if (
+    outcome !== "public" &&
+    outcome !== "private" &&
+    outcome !== "terminal" &&
+    outcome !== "retryable"
+  ) {
     return { outcome: "retryable" };
   }
   const retryAt = Number(record.retryAt);
