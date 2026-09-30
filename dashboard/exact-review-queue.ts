@@ -1,3 +1,10 @@
+import { gatewayExecution } from "./gateway-execution.ts";
+import {
+  reviewCoordinatorRepository,
+  reviewCoordinatorWorkflow,
+  configuredReviewRepositories,
+  privateReviewTargetAllowed,
+} from "./review-coordinator.ts";
 import { stableJson } from "../src/stable-json.ts";
 import { exactReviewSourceRevisionMaterial } from "./exact-review-source-revision.ts";
 import {
@@ -36,6 +43,7 @@ import {
 import { parseAuditWaveState, type AuditWaveState } from "../src/audit-wave-state.ts";
 import {
   HOSTED_TARGET_ELIGIBILITY_HEADER,
+  hostedTargetIsAdmitted,
   hostedTargetRetryAfterSeconds,
   hostedTargetRetryableAdmission,
   normalizeHostedTargetAdmission,
@@ -281,7 +289,6 @@ export {
 const RECENT_DURABLE_PUBLICATION_EVENTS_CACHE_MS = 60_000;
 
 const GITHUB_TIMEOUT_MS = 4500;
-const CLAWSWEEPER_REVIEW_REPO = "openclaw/clawsweeper";
 
 type ExactReviewBackoffReason =
   | "dispatch_debounce"
@@ -1104,6 +1111,19 @@ export class ExactReviewQueue {
     }
     await this.ensureReady();
     this.cleanupLegacyCompatibilitySync();
+    if (request.method === "POST" && url.pathname.startsWith("/gateway/")) {
+      if (this.env.EXACT_REVIEW_PRIVATE_GATEWAY !== "1")
+        return json({ error: "gateway_disabled" }, 404);
+      const action = url.pathname.slice("/gateway/".length);
+      const result = gatewayExecution(
+        this.storage.kv,
+        Object.values(this.readStateSync().items),
+        action,
+        objectValue(await request.json().catch(() => null)),
+        Date.now(),
+      );
+      return json(result.body, result.status);
+    }
     if (request.method === "POST" && url.pathname === "/admission-capabilities") {
       return json(this.reviewAdmissionCapabilities());
     }
@@ -1427,7 +1447,7 @@ export class ExactReviewQueue {
           this.hasPreparedHostedTargetEligibility(request, targetRepo),
           true,
         );
-        if (admission.outcome !== "public") {
+        if (!hostedTargetIsAdmitted(admission)) {
           return hostedTargetProbeResponse(admission);
         }
       }
@@ -1476,7 +1496,7 @@ export class ExactReviewQueue {
         this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
         true,
       );
-      if (admission.outcome !== "public") {
+      if (!hostedTargetIsAdmitted(admission)) {
         return hostedTargetProbeResponse(admission);
       }
       const reservationKey = exactReviewBranchAuthorityReservationKey(deliveryId);
@@ -1551,7 +1571,7 @@ export class ExactReviewQueue {
         this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
         true,
       );
-      if (admission.outcome !== "public") {
+      if (!hostedTargetIsAdmitted(admission)) {
         return hostedTargetProbeResponse(admission);
       }
       const reservationKey = exactReviewSourceAuthorityReservationKey(deliveryId);
@@ -1795,7 +1815,7 @@ export class ExactReviewQueue {
         this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
         true,
       );
-      if (admission.outcome !== "public") return hostedTargetProbeResponse(admission);
+      if (!hostedTargetIsAdmitted(admission)) return hostedTargetProbeResponse(admission);
 
       const now = Date.now();
       const semanticEdited = await exactReviewEditedSemanticInput(decision);
@@ -5616,7 +5636,7 @@ export class ExactReviewQueue {
       liveCandidates,
       EXACT_REVIEW_ADMISSION_LIVE_CHECK_CONCURRENCY,
       async (candidate) => {
-        if (initialTargetAdmissions.get(candidate.decision.targetRepo)?.outcome !== "public") {
+        if (!hostedTargetIsAdmitted(initialTargetAdmissions.get(candidate.decision.targetRepo))) {
           return { ...candidate, state: { state: "unavailable" as const } };
         }
         try {
@@ -5651,7 +5671,7 @@ export class ExactReviewQueue {
       publicationCandidates,
       EXACT_REVIEW_ADMISSION_LIVE_CHECK_CONCURRENCY,
       async (candidate) => {
-        if (initialTargetAdmissions.get(candidate.decision.targetRepo)?.outcome !== "public") {
+        if (!hostedTargetIsAdmitted(initialTargetAdmissions.get(candidate.decision.targetRepo))) {
           return { ...candidate, state: { state: "unavailable" as const } };
         }
         // Finalizers carry no target work. Their second public admission is
@@ -5678,7 +5698,7 @@ export class ExactReviewQueue {
     );
     const dispatchTargetAdmissions = await this.hostedTargetAdmissions(
       [...initialTargetAdmissions]
-        .filter(([, result]) => result.outcome === "public")
+        .filter(([, result]) => hostedTargetIsAdmitted(result))
         .map(([targetRepo]) => targetRepo),
       hostedTargetMetadataToken,
     );
@@ -5702,7 +5722,7 @@ export class ExactReviewQueue {
         candidate.queueState !== "pending" ||
         candidate.state.state !== "unavailable" ||
         !("failure" in candidate) ||
-        dispatchTargetAdmissions.get(candidate.decision.targetRepo)?.outcome !== "public" ||
+        !hostedTargetIsAdmitted(dispatchTargetAdmissions.get(candidate.decision.targetRepo)) ||
         candidate.failure.scope !== "global"
       ) {
         continue;
@@ -5722,10 +5742,11 @@ export class ExactReviewQueue {
       ) {
         continue;
       }
-      const targetAdmission =
-        initialTargetAdmissions.get(item.decision.targetRepo)?.outcome === "public"
-          ? dispatchTargetAdmissions.get(item.decision.targetRepo)
-          : initialTargetAdmissions.get(item.decision.targetRepo);
+      const targetAdmission = hostedTargetIsAdmitted(
+        initialTargetAdmissions.get(item.decision.targetRepo),
+      )
+        ? dispatchTargetAdmissions.get(item.decision.targetRepo)
+        : initialTargetAdmissions.get(item.decision.targetRepo);
       if (targetAdmission?.outcome === "terminal") {
         if (item.state === "parked" && exactReviewQueueHasCommandContext(item)) {
           // Losing hosted/public eligibility is not an acknowledgement receipt
@@ -5763,7 +5784,7 @@ export class ExactReviewQueue {
           continue;
         item.parkedTerminalCheckedAt = checkedAt;
         if (
-          targetAdmission?.outcome === "public" &&
+          hostedTargetIsAdmitted(targetAdmission) &&
           "closedCommandTarget" in candidate &&
           candidate.closedCommandTarget
         ) {
@@ -5891,10 +5912,11 @@ export class ExactReviewQueue {
       ) {
         continue;
       }
-      const targetAdmission =
-        initialTargetAdmissions.get(item.decision.targetRepo)?.outcome === "public"
-          ? dispatchTargetAdmissions.get(item.decision.targetRepo)
-          : initialTargetAdmissions.get(item.decision.targetRepo);
+      const targetAdmission = hostedTargetIsAdmitted(
+        initialTargetAdmissions.get(item.decision.targetRepo),
+      )
+        ? dispatchTargetAdmissions.get(item.decision.targetRepo)
+        : initialTargetAdmissions.get(item.decision.targetRepo);
       if (targetAdmission?.outcome === "terminal") {
         if (item.terminalFinalization?.parkedCommand) {
           deferIneligibleParkedCommandFinalizer(checkedState, item, checkedAt);
@@ -5961,12 +5983,12 @@ export class ExactReviewQueue {
         // A committed finalizer holds no review/publication work, but it still
         // requires the same current public admission before target credentials.
         if (item.terminalFinalization) {
-          return dispatchTargetAdmissions.get(item.decision.targetRepo)?.outcome === "public"
+          return hostedTargetIsAdmitted(dispatchTargetAdmissions.get(item.decision.targetRepo))
             ? [item]
             : [];
         }
         if (checkedBatchOwnership.itemKeys.includes(item.key)) return [];
-        if (dispatchTargetAdmissions.get(item.decision.targetRepo)?.outcome !== "public") {
+        if (!hostedTargetIsAdmitted(dispatchTargetAdmissions.get(item.decision.targetRepo))) {
           return [];
         }
         const livePublication = livePublicationStateByCandidate.get(candidate.key);
@@ -6000,7 +6022,7 @@ export class ExactReviewQueue {
       // A command acknowledgement needs the workflow's terminal completion
       // path even when the target is already closed. Unprobed reviews wait for
       // a later bounded admission pass instead of bypassing the live check.
-      return dispatchTargetAdmissions.get(item.decision.targetRepo)?.outcome === "public" &&
+      return hostedTargetIsAdmitted(dispatchTargetAdmissions.get(item.decision.targetRepo)) &&
         (live?.state.state === "open" ||
           (live?.state.state === "terminal" && exactReviewQueueHasCommandContext(item)))
         ? [item]
@@ -6217,7 +6239,7 @@ export class ExactReviewQueue {
       EXACT_REVIEW_ADMISSION_LIVE_CHECK_CONCURRENCY,
       async (candidate) => {
         const hostedAdmission = targetAdmissions.get(candidate.decision.targetRepo);
-        if (hostedAdmission?.outcome !== "public") {
+        if (!hostedTargetIsAdmitted(hostedAdmission)) {
           return {
             ...candidate,
             hostedAdmission,
@@ -8379,7 +8401,7 @@ export class ExactReviewQueue {
           return (
             item?.revision === membership.revision &&
             exactReviewQueueIsPublication(item) &&
-            admissions.get(item.decision.targetRepo)?.outcome === "public"
+            hostedTargetIsAdmitted(admissions.get(item.decision.targetRepo))
           );
         }),
       };
@@ -9604,9 +9626,14 @@ export class ExactReviewQueue {
       try {
         admission = await probeHostedPublicTarget(
           targetRepo,
-          await hostedTargetMetadataToken(),
+          privateReviewTargetAllowed(this.env, targetRepo)
+            ? await exactReviewPrivateTargetMetadataToken(this.env, targetRepo)
+            : await hostedTargetMetadataToken(),
           (input, init) => fetch(input, init),
-          { apiUrl: (path) => githubApiUrl(this.env, path) },
+          {
+            apiUrl: (path) => githubApiUrl(this.env, path),
+            allowPrivate: privateReviewTargetAllowed(this.env, targetRepo),
+          },
         );
       } catch (error) {
         admission = hostedTargetRetryableAdmission(error);
@@ -9638,7 +9665,7 @@ export class ExactReviewQueue {
       ? this.env.hostedTargetConfiguredRepositories.filter(
           (value): value is string => typeof value === "string",
         )
-      : undefined;
+      : configuredReviewRepositories(this.env);
     return resolveHostedTargetEligibility(targetRepo, (input, init) => fetch(input, init), {
       ...(configuredRepositories ? { configuredRepositories } : {}),
       ...(typeof this.env.hostedTargetPredicate === "function"
@@ -10388,7 +10415,7 @@ export class ExactReviewQueue {
           producer.decision.targetRepo,
           metadataToken,
         );
-        if (targetAdmission.outcome === "public") {
+        if (hostedTargetIsAdmitted(targetAdmission)) {
           const token = await exactReviewTargetReadToken(this.env, producer.decision.targetRepo);
           target = await exactReviewClosedCommandTarget(token, producer.decision, this.env);
           // A visibility change during the item read cannot authorize a PATCH.
@@ -10412,7 +10439,7 @@ export class ExactReviewQueue {
       state = currentState;
       item = current;
       now = Date.now();
-      if (targetAdmission.outcome !== "public") {
+      if (!hostedTargetIsAdmitted(targetAdmission)) {
         deferIneligibleParkedCommandFinalizer(state, item, now);
         await this.writeState(state);
         await this.scheduleNext(state, now);
@@ -10640,7 +10667,7 @@ export class ExactReviewQueue {
       hostedTargetMetadataToken,
       this.hasPreparedHostedTargetEligibility(request, targetRepo),
     );
-    if (admission.outcome !== "public") {
+    if (!hostedTargetIsAdmitted(admission)) {
       if (admission.outcome === "terminal") {
         const state = this.readStateSync();
         if (this.removeTerminalFinalizationDriversForTarget(state, canonicalTargetKey)) {
@@ -17265,7 +17292,12 @@ function boundedStateWriterMetadata(value: unknown): string | null {
 }
 
 async function exactReviewDispatchToken(env) {
-  return exactReviewRepositoryToken(env, { actions: "write", contents: "write" });
+  return exactReviewRepositoryToken(
+    env,
+    env.EXACT_REVIEW_PRIVATE_GATEWAY === "1"
+      ? { contents: "write" }
+      : { actions: "write", contents: "write" },
+  );
 }
 
 async function exactReviewSourceAuthorityLiveHead(
@@ -17777,20 +17809,44 @@ async function exactReviewTargetItemState(
 }
 
 export async function exactReviewActionsReadToken(env) {
-  return exactReviewRepositoryToken(env, { actions: "read" });
+  // Public coordinator Actions metadata is readable with a metadata-only token.
+  return exactReviewRepositoryToken(
+    env,
+    env.CLAWSWEEPER_COORDINATOR_PUBLIC === "1" ? { metadata: "read" } : { actions: "read" },
+  );
+}
+
+export async function exactReviewPrivateTargetMetadataToken(env, targetRepo: string) {
+  if (!privateReviewTargetAllowed(env, targetRepo))
+    throw new Error("Private review target is not enrolled");
+  const credentials = githubAppCredentials(env);
+  if (!credentials) throw new Error("github app is not configured");
+  const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
+  return createGithubAppTokenFor({
+    env,
+    appJwt,
+    installationId: await githubAppInstallationId(appJwt, targetRepo, env),
+    label: targetRepo,
+    repositories: [repoName(targetRepo)],
+    permissions: { metadata: "read" },
+  });
 }
 
 export async function exactReviewRepositoryToken(env, permissions) {
   const credentials = githubAppCredentials(env);
   if (!credentials) throw new Error("github app is not configured");
   const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
-  const installationId = await githubAppInstallationId(appJwt, CLAWSWEEPER_REVIEW_REPO, env);
+  const installationId = await githubAppInstallationId(
+    appJwt,
+    reviewCoordinatorRepository(env),
+    env,
+  );
   return createGithubAppTokenFor({
     env,
     appJwt,
     installationId,
-    label: CLAWSWEEPER_REVIEW_REPO,
-    repositories: [repoName(CLAWSWEEPER_REVIEW_REPO)],
+    label: reviewCoordinatorRepository(env),
+    repositories: [repoName(reviewCoordinatorRepository(env))],
     permissions,
   });
 }
@@ -17806,7 +17862,7 @@ async function exactReviewWorkflowState(token: string, env = {}) {
   const payload = await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/actions/workflows/sweep.yml`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/actions/workflows/${reviewCoordinatorWorkflow(env)}`,
     method: "GET",
     body: undefined,
     errorLabel: "ClawSweeper workflow status",
@@ -17824,7 +17880,7 @@ export async function exactReviewTerminalRun(
   const latest = await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/actions/runs/${candidate.runId}`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/actions/runs/${candidate.runId}`,
     method: "GET",
     body: undefined,
     errorLabel: "ClawSweeper run status",
@@ -17845,7 +17901,7 @@ export async function exactReviewTerminalRunsFromBatch(
       payload = await githubTokenJson({
         env,
         token,
-        path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/actions/workflows/sweep.yml/runs?event=repository_dispatch&per_page=100&page=${page}`,
+        path: `/repos/${reviewCoordinatorRepository(env)}/actions/workflows/${reviewCoordinatorWorkflow(env)}/runs?event=repository_dispatch&per_page=100&page=${page}`,
         method: "GET",
         body: undefined,
         errorLabel: "ClawSweeper run batch",
@@ -17895,7 +17951,7 @@ async function exactReviewTerminalRunFromSummary(
   const payload = await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/actions/runs/${candidate.runId}/attempts/${latestRunAttempt}`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/actions/runs/${candidate.runId}/attempts/${latestRunAttempt}`,
     method: "GET",
     body: undefined,
     errorLabel: "ClawSweeper run attempt status",
@@ -17963,7 +18019,7 @@ async function dispatchClawsweeperItem({
   await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/dispatches`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/dispatches`,
     method: "POST",
     body: {
       event_type: "clawsweeper_item",
@@ -18094,7 +18150,7 @@ async function dispatchExactReviewBatchWorkflow({
   await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/actions/workflows/exact-review-batch-publish.yml/dispatches`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/actions/workflows/exact-review-batch-publish.yml/dispatches`,
     method: "POST",
     body: {
       ref: "main",

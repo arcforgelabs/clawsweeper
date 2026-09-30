@@ -322,7 +322,7 @@ export async function executeGatewayReview(input: {
       );
     } catch (error) {
       if (isTimeout(error)) throw error;
-      throw new Error("Gateway review capability is unavailable.");
+      throw new Error("Gateway review capability is unavailable.", { cause: error });
     }
     const prefix = assertCapability(capability, input.agentId);
     if (input.signal.aborted || remaining() < MIN_AGENT_MS) {
@@ -347,7 +347,7 @@ export async function executeGatewayReview(input: {
       );
     } catch (error) {
       if (isTimeout(error)) throw error;
-      throw new Error("Gateway sessions.create failed.");
+      throw new Error("Gateway sessions.create failed.", { cause: error });
     }
     const session = assertCreatedSession(created, {
       agentId: input.agentId,
@@ -382,7 +382,7 @@ export async function executeGatewayReview(input: {
       );
     } catch (error) {
       if (isTimeout(error)) throw error;
-      throw new Error("Gateway review failed.");
+      throw new Error("Gateway review failed.", { cause: error });
     }
     let terminal = await terminalPayload(agent, rpc, runKey, remaining, input.signal);
     noteReported(meta, terminal);
@@ -591,7 +591,7 @@ async function terminalPayload(
     );
   } catch (error) {
     if (isTimeout(error)) throw error;
-    throw new Error("Gateway review failed.");
+    throw new Error("Gateway review failed.", { cause: error });
   }
   const terminal = requireRecord(waited, "Gateway agent result");
   if (isPending(terminal)) throw new Error("Gateway review returned an unexpected status.");
