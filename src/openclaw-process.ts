@@ -18,7 +18,11 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizedOutputFileBytes, normalizedTailBytes } from "./codex-output-capture.js";
+import {
+  NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES,
+  normalizedOutputFileBytes,
+  normalizedTailBytes,
+} from "./codex-output-capture.js";
 import type { CodexProcessResult } from "./codex-process.js";
 import {
   assertExclusiveNativeXaiProfile,
@@ -29,7 +33,7 @@ const OPENCLAW_PROCESS_WORKER_PATH = fileURLToPath(
   new URL("./openclaw-process-worker.js", import.meta.url),
 );
 const STDERR_FAILURE_TAIL_BYTES = 8 * 1024;
-export const NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES = 2048;
+export { NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES };
 const NATIVE_CHECKOUT_DIAGNOSTIC_NAME = /^[0-9]+\.native-checkout-inspection\.json$/;
 const CHALLENGE_MISMATCH = "OpenClaw checkout inspection did not return the runner challenge.";
 const RECEIPT_MISMATCH = "OpenClaw checkout inspection did not read the exact challenged path.";
@@ -799,7 +803,10 @@ function nativeCheckoutDiagnosticFor(
       errorKind: processErrorKind(processResult.error),
     },
     stdoutBytes,
-    envelope: stdout === undefined ? emptyEnvelopeDiagnostic() : envelopePresence(stdout),
+    envelope:
+      stdout === undefined
+        ? emptyEnvelopeDiagnostic()
+        : envelopePresence(stdout, options.model.slice(4)),
     normalized: { status: safeProcessStatus(processResult.status), validationFailure: null },
     receipt: null,
   };
@@ -844,7 +851,7 @@ function writeNativeCheckoutDiagnostic(
   }
 }
 
-function envelopePresence(stdout: string): NativeCheckoutEnvelopeDiagnostic {
+function envelopePresence(stdout: string, expectedModel: string): NativeCheckoutEnvelopeDiagnostic {
   let value: unknown;
   try {
     value = JSON.parse(stdout);
@@ -857,11 +864,17 @@ function envelopePresence(stdout: string): NativeCheckoutEnvelopeDiagnostic {
     okPresent: typeof value.ok === "boolean",
     ok: typeof value.ok === "boolean" ? value.ok : null,
     statusPresent: typeof value.status === "string",
-    status: safeDiagnosticToken(value.status),
+    status:
+      typeof value.status === "string" && ["ok", "error", "timeout"].includes(value.status)
+        ? value.status
+        : null,
     providerPresent: typeof value.provider === "string",
-    provider: safeDiagnosticToken(value.provider),
+    provider: value.provider === "xai" ? "xai" : null,
     modelPresent: typeof value.model === "string",
-    model: safeDiagnosticToken(value.model),
+    model:
+      value.model === expectedModel && /^grok-[A-Za-z0-9_.-]{1,58}$/.test(expectedModel)
+        ? expectedModel
+        : null,
     finalPresent: typeof value.final === "string" && value.final.length > 0,
   };
 }
@@ -881,13 +894,6 @@ function emptyEnvelopeDiagnostic(): NativeCheckoutEnvelopeDiagnostic {
   };
 }
 
-function safeDiagnosticToken(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(trimmed)) return null;
-  return trimmed;
-}
-
 function safeValidationFailure(message: string | null): string | null {
   return message && SAFE_VALIDATION_FAILURES.has(message) ? message : null;
 }
@@ -903,8 +909,26 @@ function safeProcessSignal(signal: NodeJS.Signals | null): string | null {
 function processErrorKind(error: Error | undefined): string | null {
   if (!error) return null;
   const code = "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
-  if (typeof code === "string" && /^[A-Z][A-Z0-9_]{0,31}$/.test(code)) return code;
-  if (error.name === "Error" || /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(error.name)) return error.name;
+  if (
+    typeof code === "string" &&
+    [
+      "ETIMEDOUT",
+      "ENOENT",
+      "EACCES",
+      "EPERM",
+      "E2BIG",
+      "ENOBUFS",
+      "EPIPE",
+      "EIO",
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ENOSPC",
+      "ENOMEM",
+    ].includes(code)
+  )
+    return code;
+  if (["Error", "TypeError", "RangeError", "SyntaxError", "AbortError"].includes(error.name))
+    return error.name;
   return "Error";
 }
 

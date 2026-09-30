@@ -561,7 +561,7 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
               item.number,
             );
             if (checkoutDiagnosticPath) ensureDir(codexWorkDir);
-            const inspection = runReviewCheckoutInspection({
+            const inspectCheckout = () => runReviewCheckoutInspection({
               // Structural reuse has no model payload. Hydrated reuse scans the
               // current context too, including source comments.
               initialPrompt: serializeReviewContext(
@@ -584,6 +584,13 @@ export function createReviewCommandWorkflow(dependencies: CreateReviewCommandWor
               timeoutMs,
               ...(checkoutDiagnosticPath ? { checkoutDiagnosticPath } : {}),
             });
+            const inspection = checkoutDiagnosticPath
+              ? produceReviewOutput(outputBudget, {
+                  paths: [checkoutDiagnosticPath],
+                  maxBytes: NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES,
+                  maxFiles: 1,
+                }, inspectCheckout)
+              : inspectCheckout();
             cachePreflightState =
               !inspection.error && inspection.status === 0 ? "passed" : "failed";
           }
