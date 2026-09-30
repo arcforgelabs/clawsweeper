@@ -186,7 +186,7 @@ process.exitCode=${variant === "timeout" ? 2 : variant === "error-payload" ? 1 :
           ? (options: Parameters<typeof runOpenclawProcess>[0]) => {
               const schemaPath = join(root, "output-schema.json");
               writeFileSync(schemaPath, JSON.stringify(options.outputSchema));
-              const { outputSchema, ...rest } = options;
+              const { outputSchema: _outputSchema, ...rest } = options;
               return runAgentProcess({
                 ...rest,
                 env: {

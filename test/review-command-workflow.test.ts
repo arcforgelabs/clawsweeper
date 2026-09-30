@@ -356,7 +356,8 @@ else {
             (item.promptFileBytes +
               item.resultFileBytes +
               item.streamFileBytes * 2 +
-              item.threadStateBytes) +
+              item.threadStateBytes +
+              2048) +
           item.metadataBytes +
           item.reportsBytes;
         const existing = join(artifactDir, "existing");
