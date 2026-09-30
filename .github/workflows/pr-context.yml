@@ -1,0 +1,27 @@
+# arc-forge-org-consistency: managed by arc-forge-tools components/org-consistency
+name: PR context
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  context:
+    runs-on: ubuntu-latest
+    if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pull request body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body > "$RUNNER_TEMP/pr-body.md"
+
+      - name: Require problem, why, impact, and evidence
+        run: python3 .github/org-consistency/pr-context-check.py "$RUNNER_TEMP/pr-body.md"
