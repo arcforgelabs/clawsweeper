@@ -2,6 +2,7 @@ import { isRecord } from "./value-coerce.js";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   constants,
   existsSync,
@@ -28,9 +29,25 @@ import {
   assertExclusiveNativeXaiProfile,
   readNativeOpenclawTranscript,
 } from "./openclaw-native-transcript.js";
+import {
+  canonicalGatewayCwd,
+  composeGatewayMessage,
+  gatewayAgentDatabasePath,
+  gatewayChildEnvironment,
+  gatewayReviewEnabled,
+  gatewaySessionKeyPrefix,
+  readGatewaySessionProof,
+  requireGatewayReviewSettings,
+  unavailableGatewayProvenance,
+  type GatewayProvenance,
+  type GatewayRunMeta,
+} from "./openclaw-gateway-review.js";
 
 const OPENCLAW_PROCESS_WORKER_PATH = fileURLToPath(
   new URL("./openclaw-process-worker.js", import.meta.url),
+);
+const OPENCLAW_GATEWAY_WORKER_PATH = fileURLToPath(
+  new URL("./openclaw-gateway-worker.js", import.meta.url),
 );
 const STDERR_FAILURE_TAIL_BYTES = 8 * 1024;
 export { NATIVE_CHECKOUT_DIAGNOSTIC_MAX_BYTES };
@@ -67,6 +84,7 @@ interface NativeCheckoutDiagnostic {
   envelope: NativeCheckoutEnvelopeDiagnostic;
   normalized: { status: number | null; validationFailure: string | null };
   receipt: ExactReadReceiptClassification | null;
+  provenance?: GatewayProvenance;
 }
 
 export function nativeCheckoutDiagnosticPath(
@@ -110,6 +128,7 @@ export interface OpenClawProcessOptions {
 }
 
 export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProcessResult {
+  if (gatewayReviewEnabled(options.env)) return runGatewayOwnedReview(options);
   const stateDir = mkdtempSync(join(tmpdir(), "clawsweeper-openclaw-process-"));
   const configPath = join(stateDir, "openclaw.json");
   const promptPath = join(stateDir, "prompt.md");
@@ -378,6 +397,338 @@ export function runOpenclawProcess(options: OpenClawProcessOptions): CodexProces
     }
     rmSync(stateDir, { recursive: true, force: true });
   }
+}
+
+function runGatewayOwnedReview(options: OpenClawProcessOptions): CodexProcessResult {
+  const settings = requireGatewayReviewSettings(options.env);
+  if (!isAbsolute(options.cwd) || options.cwd.includes("\0")) {
+    return failedResult(new Error("Gateway review cwd must be absolute."));
+  }
+  let message = "";
+  try {
+    options = { ...options, cwd: canonicalGatewayCwd(options.cwd) };
+    message = composeGatewayMessage(
+      options.prompt,
+      options.outputSchema,
+      Boolean(options.checkoutInspection),
+    );
+  } catch (error) {
+    return failedResult(error instanceof Error ? error : new Error(String(error)));
+  }
+  const secrets = [message];
+  if (options.outputSchema) {
+    const schemaJson = JSON.stringify(options.outputSchema);
+    if (schemaJson.length >= 12) secrets.push(schemaJson);
+  }
+  const stateDir = mkdtempSync(join(tmpdir(), "clawsweeper-openclaw-gateway-"));
+  const resultPath = join(stateDir, "result.json");
+  const metaPath = join(stateDir, "meta.json");
+  const optionsPath = join(stateDir, "worker-options.json");
+  let diagnostic: NativeCheckoutDiagnostic | undefined;
+  const databasePath = gatewayAgentDatabasePath(settings.agentId, options.env);
+  const prefix = gatewaySessionKeyPrefix(settings.agentId);
+  try {
+    writeFileSync(
+      optionsPath,
+      JSON.stringify({
+        packageRoot: settings.packageRoot,
+        agentId: settings.agentId,
+        message,
+        cwd: options.cwd,
+        timeoutMs: options.timeoutMs,
+        resultPath,
+        metaPath,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    chmodSync(optionsPath, 0o600);
+    const worker = spawnSync(process.execPath, [OPENCLAW_GATEWAY_WORKER_PATH, optionsPath], {
+      cwd: options.cwd,
+      env: gatewayChildEnvironment(options.env),
+      stdio: "ignore",
+      timeout: options.timeoutMs + 10_000,
+    });
+    if (!existsSync(resultPath)) {
+      const failed = worker.error
+        ? failedResult(worker.error, worker.status, worker.signal)
+        : failedResult(
+            new Error(
+              `OpenClaw process worker failed with exit ${worker.status ?? "unknown"} and did not write a result.`,
+            ),
+            worker.status,
+            worker.signal,
+          );
+      diagnostic = gatewayCheckoutDiagnostic(
+        options,
+        failed,
+        "",
+        unavailableGatewayProvenance(),
+        false,
+      );
+      return redactGatewayResult(failed, secrets);
+    }
+    let processResult = readGatewayWorkerResult(resultPath);
+    if (worker.error && !processResult.error) {
+      processResult = { ...processResult, error: worker.error };
+      diagnostic = gatewayCheckoutDiagnostic(
+        options,
+        processResult,
+        processResult.stdout,
+        unavailableGatewayProvenance(),
+        false,
+      );
+      return redactGatewayResult(processResult, secrets);
+    }
+    const meta = readGatewayMeta(metaPath);
+    const rawStdout = processResult.stdout;
+    const accepting = processResult.status === 0 && !processResult.error;
+    let provenance = unavailableGatewayProvenance();
+    let identityMismatch = meta?.mismatch === true;
+    if (meta?.reportedSessionId && meta.reportedSessionId !== meta.sessionId)
+      identityMismatch = true;
+    if (meta?.reportedSessionKey && meta.reportedSessionKey !== meta.sessionKey)
+      identityMismatch = true;
+    if (accepting && (!meta?.sessionId || !meta.sessionKey?.startsWith(prefix)))
+      identityMismatch = true;
+    if (accepting && meta?.permissionMode !== "read-only") {
+      const failed = failedResult(new Error("Gateway review session was not created read-only."));
+      diagnostic = gatewayCheckoutDiagnostic(options, failed, rawStdout, provenance, false);
+      return redactGatewayResult(failed, secrets);
+    }
+    if (accepting && meta?.cwd !== options.cwd) {
+      const failed = failedResult(
+        new Error("Gateway review session cwd did not match the requested checkout."),
+      );
+      diagnostic = gatewayCheckoutDiagnostic(options, failed, rawStdout, provenance, false);
+      return redactGatewayResult(failed, secrets);
+    }
+    if (identityMismatch) {
+      const failed = accepting
+        ? failedResult(new Error("Gateway review session did not match the created session."))
+        : processResult;
+      diagnostic = gatewayCheckoutDiagnostic(options, failed, rawStdout, provenance, false);
+      return redactGatewayResult(failed, secrets);
+    }
+    if (meta?.sessionId) {
+      try {
+        const proof = readGatewaySessionProof(databasePath, meta.sessionId, meta.sessionKey);
+        if (proof.mismatch) {
+          const failed = failedResult(
+            new Error("Gateway review session did not match the created session."),
+          );
+          diagnostic = gatewayCheckoutDiagnostic(options, failed, rawStdout, provenance, false);
+          return redactGatewayResult(accepting ? failed : processResult, secrets);
+        }
+        provenance = proof.provenance;
+      } catch (error) {
+        if (accepting) throw error;
+      }
+    }
+    // Retain host-observed runtime provenance outside the untrusted checkout.
+    const provenancePath = options.env.CLAWSWEEPER_OPENCLAW_PROVENANCE_PATH;
+    if (accepting && !options.checkoutInspection && provenancePath) {
+      if (!isAbsolute(provenancePath)) throw new Error("Gateway provenance path must be absolute.");
+      writeFileSync(
+        provenancePath,
+        JSON.stringify({
+          version: 1,
+          sessionId: meta?.sessionId,
+          sessionKey: meta?.sessionKey,
+          provider: provenance.provider,
+          model: provenance.model,
+        }),
+        { mode: 0o600 },
+      );
+    }
+    let transcript: string | undefined;
+    if (accepting && options.checkoutInspection) {
+      if (!meta?.sessionId) {
+        throw new Error("Native checkout transcript is missing or exceeds its event limit.");
+      }
+      transcript = readNativeOpenclawTranscript(databasePath, meta.sessionId);
+    }
+    const normalized = normalizeOpenclawResult(
+      processResult,
+      rawStdout,
+      options.checkoutInspection,
+      options.checkoutInspection
+        ? {
+            cwd: options.cwd,
+            transcriptPath: join(stateDir, "unused-transcript.jsonl"),
+            ...(transcript !== undefined ? { transcript } : {}),
+          }
+        : undefined,
+    );
+    diagnostic = gatewayCheckoutDiagnostic(
+      options,
+      normalized.result,
+      rawStdout,
+      provenance,
+      accepting,
+    );
+    if (diagnostic) {
+      diagnostic.normalized = {
+        status: safeProcessStatus(normalized.result.status),
+        validationFailure: safeValidationFailure(normalized.inspection.validationFailure),
+      };
+      diagnostic.receipt = normalized.inspection.receipt;
+    }
+    return redactGatewayResult(normalized.result, secrets);
+  } catch (error) {
+    if (diagnostic && diagnostic.normalized.validationFailure === null) {
+      const text = error instanceof Error ? error.message : "";
+      diagnostic.normalized = { status: null, validationFailure: safeValidationFailure(text) };
+      if (diagnostic.receipt === null) diagnostic.receipt = "unavailable";
+    }
+    return redactGatewayResult(
+      failedResult(error instanceof Error ? error : new Error(String(error))),
+      secrets,
+    );
+  } finally {
+    try {
+      if (diagnostic && options.checkoutDiagnosticPath) {
+        writeNativeCheckoutDiagnostic(options.checkoutDiagnosticPath, diagnostic, stateDir);
+      }
+    } catch {
+      // Diagnostic retention must not replace the inspection result.
+    }
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+function gatewayCheckoutDiagnostic(
+  options: OpenClawProcessOptions,
+  processResult: CodexProcessResult,
+  rawStdout: string,
+  provenance: GatewayProvenance,
+  finalAccepted: boolean,
+): NativeCheckoutDiagnostic | undefined {
+  if (!options.checkoutInspection) return undefined;
+  let parsed = false;
+  let finalPresent = false;
+  try {
+    const value: unknown = rawStdout ? JSON.parse(rawStdout) : undefined;
+    if (isRecord(value)) {
+      parsed = true;
+      const result = isRecord(value.result) ? value.result : value;
+      const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+      finalPresent = payloads.some(
+        (payload) =>
+          isRecord(payload) && typeof payload.text === "string" && payload.text.length > 0,
+      );
+    }
+  } catch {
+    parsed = false;
+  }
+  const succeeded = processResult.status === 0 && !processResult.error;
+  const code =
+    processResult.error && "code" in processResult.error
+      ? (processResult.error as NodeJS.ErrnoException).code
+      : undefined;
+  const status = succeeded ? "ok" : code === "ETIMEDOUT" ? "timeout" : "error";
+  return {
+    version: 1,
+    raw: {
+      status: safeProcessStatus(processResult.status),
+      signal: safeProcessSignal(processResult.signal),
+      errorKind: processErrorKind(processResult.error),
+    },
+    stdoutBytes: Buffer.byteLength(rawStdout),
+    envelope: {
+      parsed,
+      okPresent: true,
+      ok: succeeded,
+      statusPresent: true,
+      status,
+      providerPresent: provenance.provider !== null,
+      provider: provenance.provider,
+      modelPresent: provenance.model !== null,
+      model: provenance.model,
+      finalPresent: finalAccepted && finalPresent,
+    },
+    normalized: { status: safeProcessStatus(processResult.status), validationFailure: null },
+    receipt: null,
+    provenance,
+  };
+}
+
+function readGatewayWorkerResult(resultPath: string): CodexProcessResult {
+  const metadata = lstatSync(resultPath);
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 9 * 1024 * 1024) {
+    throw new Error("Gateway review worker result is invalid.");
+  }
+  const value: unknown = JSON.parse(readFileSync(resultPath, "utf8"));
+  if (!isRecord(value) || typeof value.stdout !== "string" || typeof value.stderr !== "string") {
+    throw new Error("Gateway review worker result is invalid.");
+  }
+  const status = typeof value.status === "number" ? value.status : null;
+  const error =
+    isRecord(value.error) && typeof value.error.message === "string" ? value.error : undefined;
+  return {
+    status,
+    signal: null,
+    ...(error
+      ? {
+          error: deserializeError({
+            message: String(error.message),
+            ...(typeof error.code === "string" ? { code: error.code } : {}),
+          }),
+        }
+      : {}),
+    stdout: value.stdout,
+    stderr: value.stderr,
+  };
+}
+
+function readGatewayMeta(metaPath: string): GatewayRunMeta | undefined {
+  if (!existsSync(metaPath)) return undefined;
+  const metadata = lstatSync(metaPath);
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > 65_536) {
+    throw new Error("Gateway review session metadata is invalid.");
+  }
+  const value: unknown = JSON.parse(readFileSync(metaPath, "utf8"));
+  if (!isRecord(value)) throw new Error("Gateway review session metadata is invalid.");
+  return {
+    sessionId: typeof value.sessionId === "string" ? value.sessionId : null,
+    sessionKey: typeof value.sessionKey === "string" ? value.sessionKey : null,
+    reportedSessionId: typeof value.reportedSessionId === "string" ? value.reportedSessionId : null,
+    reportedSessionKey:
+      typeof value.reportedSessionKey === "string" ? value.reportedSessionKey : null,
+    permissionMode: typeof value.permissionMode === "string" ? value.permissionMode : null,
+    cwd: typeof value.cwd === "string" ? value.cwd : null,
+    mismatch: value.mismatch === true,
+    terminalStatus: typeof value.terminalStatus === "string" ? value.terminalStatus : null,
+  };
+}
+
+function redactGatewayResult(
+  result: CodexProcessResult,
+  secrets: readonly string[],
+): CodexProcessResult {
+  if (!result.error && result.status === 0) return result;
+  const redact = (value: string) => {
+    let text = value;
+    for (const secret of secrets) {
+      if (secret.length >= 8) text = text.replaceAll(secret, "[redacted]");
+    }
+    return text;
+  };
+  const error = result.error;
+  return {
+    ...result,
+    ...(error
+      ? {
+          error: Object.assign(new Error(redact(error.message)), {
+            name: error.name,
+            ...((error as NodeJS.ErrnoException).code
+              ? { code: (error as NodeJS.ErrnoException).code }
+              : {}),
+          }),
+        }
+      : {}),
+    stdout: redact(result.stdout),
+    stderr: redact(result.stderr),
+  };
 }
 
 function nativeExecSettings(
