@@ -376,6 +376,10 @@ export async function executeGatewayReview(input: {
           timeout: timeoutSeconds,
           idempotencyKey: runKey,
           deliver: false,
+          // Background reviews must not wait behind conversational agents that
+          // can themselves be waiting for a native review. OpenClaw bounds this
+          // standard lane separately; the publisher also caps review workers.
+          lane: "subagent",
         },
         remaining(),
         true,
