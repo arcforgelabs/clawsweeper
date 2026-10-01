@@ -53,6 +53,7 @@ test("gateway review uses standard agent preferences and read-only owned session
     assert.equal(params.sessionId, "id-123");
     assert.equal(params.expectedExistingSessionId, undefined);
     assert.equal(params.sessionKey, key);
+    assert.equal(params.lane, "subagent");
     return { status: "ok", result: { payloads: [{ text: "review result" }] } };
   });
   assert.equal(result.ok, true);
