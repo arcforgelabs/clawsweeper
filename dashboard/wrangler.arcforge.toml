@@ -55,7 +55,7 @@ EXACT_REVIEW_ALLOWED_REPOSITORIES = "arcforgelabs/clawsweeper,arcforgelabs/arc-f
 CLAWSWEEPER_DASHBOARD_WORKFLOW_SOURCE = "poll"
 CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
 CLAWSWEEPER_CRABFLEET_URL = ""
-TARGET_REPOS = "arcforgelabs/arc-forge-deck,arcforgelabs/clawsweeper"
+TARGET_REPOS = "arcforgelabs/arc-forge-deck,arcforgelabs/clawsweeper,arcforgelabs/dictate"
 # Explicit public-only allowlist for canonical repository + issue/PR references
 # rendered in OpenClaw Bay. Repositories must be verified public before addition.
 PUBLIC_BAY_REPOS = "arcforgelabs/clawsweeper"

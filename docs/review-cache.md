@@ -15,7 +15,9 @@ A structural hit requires all of the following:
 
 - the prior review completed with an original keep-open verdict;
 - the review is less than 14 days old;
-- the review policy and public model are unchanged;
+- the review policy and public model are unchanged (the policy includes the
+  target's `policy_documents` blob SHAs when its profile lists any, so a
+  `VISION.md` edit invalidates every keep-open verdict in that repository);
 - the item kind and bounded source revision are unchanged across probes taken
   immediately before and after hydration, and the post-hydration probe matches
   the hydrated title, body, labels, and human comments exactly;
@@ -54,6 +56,10 @@ intervening drift forces full hydration.
 When the structural stage misses, the exact content digest
 may still reuse an unchanged keep-open verdict after the full context is
 proven.
+
+The content stage also requires the stored review policy to match the current
+one, so a changed policy document re-runs the review even when the item is
+unchanged.
 
 No cache stage can promote a report to close.
 

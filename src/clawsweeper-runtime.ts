@@ -17,6 +17,10 @@ import {
 } from "./repository-profiles.js";
 import { reviewPullChecksDigestParts } from "./review-checks-digest.js";
 import {
+  createPolicyDocumentRevisionReader,
+  type PolicyDocumentRevisions,
+} from "./review-policy-documents.js";
+import {
   reviewStructuralQuery,
   reviewStructuralRecordFromGraphql,
   type ReviewStructuralRecord,
@@ -390,7 +394,20 @@ const {
   reviewCommentContentRevision,
 } = sourceRevisionTools;
 
+// Planner and reviewer both read the default-branch root listing, so a stored
+// review's policy matches the next plan until a policy document changes.
+const targetPolicyDocumentRevisions = createPolicyDocumentRevisionReader((repo) =>
+  ghJson<unknown>(["api", `repos/${repo}/contents`]),
+);
+
 function reviewPolicyHash(options: { model?: string; sandboxMode?: string }): string {
+  return reviewPolicyHashWithDocuments(options, targetPolicyDocumentRevisions(targetProfile()));
+}
+
+function reviewPolicyHashWithDocuments(
+  options: { model?: string; sandboxMode?: string },
+  policyDocuments: PolicyDocumentRevisions | undefined,
+): string {
   const policyTargetRepo = targetRepo();
   return sha256(
     stableJson({
@@ -411,6 +428,9 @@ function reviewPolicyHash(options: { model?: string; sandboxMode?: string }): st
       repositoryProfile: targetProfile(),
       prompt: reviewPromptTemplate(),
       schema: reviewDecisionSchemaText(),
+      // Opt-in per target profile. Omitted entirely without policy documents so
+      // existing profiles keep their historical hash.
+      ...(policyDocuments ? { targetPolicyDocuments: policyDocuments } : {}),
     }),
   ).slice(0, 16);
 }
@@ -419,9 +439,19 @@ export function reviewPolicyHashForTest(
   options: {
     model?: string;
     sandboxMode?: string;
+    targetRepo?: string;
+    policyDocumentRootListing?: (targetRepo: string) => unknown;
   } = {},
 ): string {
-  return reviewPolicyHash(options);
+  const { targetRepo: testTargetRepo, policyDocumentRootListing, ...hashOptions } = options;
+  const hash = () =>
+    policyDocumentRootListing
+      ? reviewPolicyHashWithDocuments(
+          hashOptions,
+          createPolicyDocumentRevisionReader(policyDocumentRootListing)(targetProfile()),
+        )
+      : reviewPolicyHash(hashOptions);
+  return testTargetRepo ? withTargetProfile(repositoryProfileFor(testTargetRepo), hash) : hash();
 }
 
 const decisionParser = createDecisionParser({
