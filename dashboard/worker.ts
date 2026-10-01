@@ -1151,6 +1151,11 @@ export default {
         200,
       );
     }
+    if (url.pathname === "/internal/exact-review/gateway/jobs" && request.method === "POST") {
+      const body = await boundedCommandProofBody(request, 16384);
+      if (body === null) return json({ error: "too_large" }, 413);
+      return authenticatedExactReviewOperatorRequest(new Request(request, { body }), env, "/gateway/jobs");
+    }
     if (
       /^\/internal\/exact-review\/gateway\/(take|heartbeat|finish|status|overview)$/.test(
         url.pathname,
@@ -6693,7 +6698,7 @@ function bayLifecycleTimingHistory(value) {
   return { bucket_minutes: 5, points: result };
 }
 
-async function boundedCommandProofBody(request: Request): Promise<string | null> {
+async function boundedCommandProofBody(request: Request, maxBytes = 128 * 1024): Promise<string | null> {
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -6703,7 +6708,7 @@ async function boundedCommandProofBody(request: Request): Promise<string | null>
       const result = await reader.read();
       if (result.done) break;
       size += result.value.byteLength;
-      if (size > 128 * 1024) return null;
+      if (size > maxBytes) return null;
       chunks.push(result.value);
     }
     const bytes = new Uint8Array(size);

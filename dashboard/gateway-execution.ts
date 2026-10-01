@@ -58,6 +58,19 @@ export function gatewayExecution(
       executing: Object.values(records).filter((r) => !r.outcome && r.expires > now).length,
       completed_awaiting_ack: Object.values(records).filter((r) => r.outcome === "success").length,
     });
+  if (action === "jobs")
+    return result(200, { jobs: items.map((item) => {
+      const execution = active(item) ? records[key(item)] : undefined;
+      return {
+        item_key: item.key, state: item.state, revision: item.revision,
+        head_sha: item.decision.sourceHeadSha, phase: item.leasePhase ?? null,
+        run_id: item.claimedRunId ?? null, attempts: item.attempts,
+        created_at: item.createdAt, updated_at: item.updatedAt,
+        next_attempt_at: item.nextAttemptAt,
+        reason: item.parkedReason ?? item.backoffReason ?? item.lastFailureReason ?? null,
+        execution: execution?.outcome ?? (execution && execution.expires > now ? "running" : null),
+      };
+    }) });
   if (action === "take") {
     if (typeof body.owner !== "string" || !/^[a-f0-9-]{36}$/.test(body.owner))
       return result(400, { error: "invalid_owner" });
