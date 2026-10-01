@@ -62,7 +62,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: ${{ always() }}
         # workflow_run may expose secrets, so execute observer code only from the trusted default branch.
         with:
@@ -176,7 +176,7 @@ jobs:
           if (runs.length && unavailable.length === runs.length) throw new Error("all claimed run lookups failed");
           NODE
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Create state token
         id: state-token

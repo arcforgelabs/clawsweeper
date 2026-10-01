@@ -338,7 +338,7 @@ test("assist workflow isolates Codex generation from the fresh write-token publi
     workflow,
     /permissions:\n  actions: read\n  contents: read\n  issues: read\n  pull-requests: read/,
   );
-  assert.equal(workflow.match(/uses: actions\/checkout@v7/g)?.length, 4);
+  assert.equal(workflow.match(/uses: actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/g)?.length, 4);
   assert.equal(workflow.match(/persist-credentials: false/g)?.length, 4);
   assert.doesNotMatch(workflow, /REASONING_EFFORT|--codex-reasoning-effort/);
   assert.doesNotMatch(workflow, /inputs\.reasoning_effort|client_payload\.reasoning_effort/);
@@ -359,7 +359,7 @@ test("assist workflow isolates Codex generation from the fresh write-token publi
     /generation_attempt: \$\{\{ steps\.generate\.outputs\.generation_attempt \}\}/,
   );
   assert.match(generation, /generation_attempt=\$GITHUB_RUN_ATTEMPT/);
-  assert.match(generation, /actions\/upload-artifact@v7/);
+  assert.match(generation, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
   assert.match(generation, /include-hidden-files: true/);
   assert.doesNotMatch(generation, /permission-issues: write/);
   assert.doesNotMatch(generation, /write_token|Create narrow GitHub App write token/);
@@ -375,7 +375,7 @@ test("assist workflow isolates Codex generation from the fresh write-token publi
     publish.indexOf("Resolve validated target repository") <
       publish.indexOf("Create narrow GitHub App write token"),
   );
-  assert.match(publish, /actions\/download-artifact@v8/);
+  assert.match(publish, /actions\/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c/);
   assert.match(
     publish,
     /clawsweeper-assist-\$\{\{ github\.run_id \}\}-\$\{\{ needs\.assist\.outputs\.generation_attempt \}\}/,

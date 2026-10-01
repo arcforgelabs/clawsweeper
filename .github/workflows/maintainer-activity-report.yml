@@ -79,7 +79,7 @@ jobs:
           permission-pull-requests: read
 
       - name: Check out maintainers
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: openclaw/maintainers
           path: maintainers
@@ -98,7 +98,7 @@ jobs:
           node-version: 24
 
       - name: Check out ClawSweeper
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: clawsweeper
           filter: blob:none
@@ -138,7 +138,7 @@ jobs:
           node .agents/skills/openclaw-maintainer-activity/scripts/generate-maintainer-activity-history.mjs "${args[@]}"
 
       - name: Upload generated reports
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maintainer-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: maintainers/reports
@@ -154,7 +154,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out ClawSweeper
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: clawsweeper
           filter: blob:none
@@ -171,7 +171,7 @@ jobs:
           permission-contents: write
 
       - name: Check out maintainer base
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: openclaw/maintainers
           path: maintainers
@@ -181,7 +181,7 @@ jobs:
           persist-credentials: false
 
       - name: Download generated reports
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: maintainer-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: generated-reports
@@ -234,7 +234,7 @@ jobs:
           permission-contents: read
 
       - name: Check out maintainers
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: openclaw/maintainers
           path: maintainers

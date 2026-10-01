@@ -663,7 +663,7 @@ jobs:
           fi
           exit 1
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         id: source-checkout
         if: ${{ steps.claim-exact-review-queue.outputs.claimed == 'true' }}
         with:
@@ -959,7 +959,7 @@ jobs:
           }
           react "eyes"
 
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         if: ${{ steps.claim-exact-review-queue.outputs.claimed == 'true' && steps.live-item.outputs.proceed == 'true' && steps.live-item.outputs.oversized != 'true' && steps.mark-re-review-command-in-progress.outputs.terminal_state != 'true' && steps.mark-re-review-command-in-progress.outputs.queue_superseded != 'true' && (steps.command-status-fence.outcome == 'skipped' || steps.command-status-fence.outputs.authorized == 'true') }}
         with:
           path: ${{ steps.target.outputs.target_checkout_dir }}-cache.git
@@ -1968,7 +1968,7 @@ jobs:
         # Keep the artifact if direct publication needs publisher recovery after
         # its lifecycle handoff fails. A committed handoff owns the final path.
         if: ${{ always() && steps.claim-exact-review-queue.outputs.claimed == 'true' && !cancelled() && steps.create-exact-review-bundle.outcome == 'success' && (steps.direct-exact-review-publication.outputs.accepted != 'true' || steps.finalize-direct-exact-review-lifecycle.outcome != 'success') }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.create-exact-review-bundle.outputs.artifact_name }}
           path: .artifacts/exact-review-bundle
@@ -2565,7 +2565,7 @@ jobs:
         id: upload-exact-review-failure-diagnostics
         if: ${{ always() && !cancelled() && steps.claim-exact-review-queue.outputs.claimed == 'true' && steps.review-exact-event-item.outputs.failure_diagnostics == 'true' }}
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: exact-review-failure-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/event/failure-diagnostics/
@@ -2964,7 +2964,7 @@ jobs:
             echo "direct_requeue=$direct_requeue"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         id: source-checkout
         if: ${{ steps.publication-context.outputs.claimed == 'true' && steps.publication-context.outputs.direct_lifecycle_recovery != 'true' }}
         with:
@@ -3009,7 +3009,7 @@ jobs:
         if: ${{ steps.publication-context.outputs.claimed == 'true' && steps.publication-context.outputs.direct_lifecycle_recovery != 'true' }}
         id: download-exact-review-bundle
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ steps.publication-context.outputs.artifact_name }}
           run-id: ${{ steps.publication-context.outputs.producer_run_id }}
@@ -4003,7 +4003,7 @@ jobs:
           }
           NODE
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         id: source-checkout
         if: ${{ steps.finalization-context.outputs.claimed == 'true' }}
         with:
@@ -4309,7 +4309,7 @@ jobs:
       actions: write
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -4441,7 +4441,7 @@ jobs:
       group: ${{ format('clawsweeper-planner-{0}', (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.item_number == '' && github.event.inputs.item_numbers == '')) && (github.event.inputs.target_repo || ((github.event.schedule == '2/5 * * * *' || github.event.schedule == '22 * * * *') && 'openclaw/clawhub' || 'openclaw/openclaw')) || github.run_id) }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           path: clawsweeper
           filter: blob:none
@@ -4736,7 +4736,7 @@ jobs:
       issues: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -4856,7 +4856,7 @@ jobs:
           node dist/clawsweeper.js publish-action-event-paths \
             --paths-file "$event_paths_file"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: ${{ always() }}
         with:
           name: failed-review-retry-report
@@ -4883,7 +4883,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -4985,7 +4985,7 @@ jobs:
             --run-url "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
       - name: Upload canonical close-verdict audit
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: close-verdict-audit-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/clawsweeper-audit.json
@@ -5046,7 +5046,7 @@ jobs:
       proof_ready: ${{ steps.primary-proof-result.outputs.ready }}
       action_ledger_artifact_name: ${{ steps.publishable-action-ledger.outputs.name }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
           fetch-depth: 1
@@ -5278,7 +5278,7 @@ jobs:
 
       - name: Upload bound close coverage proofs
         if: ${{ always() && steps.proof-manifest.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.proof-artifact.outputs.name }}
           path: .artifacts/apply-proof/pr-close-coverage-proof/*
@@ -5288,7 +5288,7 @@ jobs:
       - name: Upload apply proof action events
         id: upload-action-events
         if: ${{ always() && steps.proof-select.outputs.item_numbers != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.proof-artifact.outputs.action_ledger_name }}
           path: ${{ runner.temp }}/clawsweeper-action-ledger/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/**
@@ -5309,13 +5309,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
 
       - name: Download apply proof action events
         if: ${{ needs.apply-proof.outputs.action_ledger_artifact_name != '' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.apply-proof.outputs.action_ledger_artifact_name }}
           path: .clawsweeper-repair/action-ledger-proof
@@ -5376,7 +5376,7 @@ jobs:
       CLAWSWEEPER_AUTHOR_PR_BUDGET: ${{ vars.CLAWSWEEPER_AUTHOR_PR_BUDGET || '15' }}
       CLAWSWEEPER_AUTHOR_PR_BUDGET_MAX_CLOSES_PER_RUN: ${{ vars.CLAWSWEEPER_AUTHOR_PR_BUDGET_MAX_CLOSES_PER_RUN || '5' }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           filter: blob:none
           fetch-depth: 0
@@ -5465,7 +5465,7 @@ jobs:
       - uses: ./.github/actions/setup-openclaw
         continue-on-error: true
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.apply-proof.outputs.artifact_name }}
           path: .artifacts/apply-proof/pr-close-coverage-proof
@@ -6040,7 +6040,7 @@ jobs:
       - name: Upload apply telemetry health
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: apply-observability-health-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -6178,14 +6178,14 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
       - name: Download apply telemetry health
         if: ${{ always() }}
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: apply-observability-health-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts

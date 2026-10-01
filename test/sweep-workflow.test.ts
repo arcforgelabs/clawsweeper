@@ -650,7 +650,7 @@ test("Codex source setup normalizes OpenClaw casing and stays out of the OpenCla
     runs: { steps: Array<{ id?: string; if?: string; uses?: string; run?: string }> };
   };
   const normalize = action.runs.steps.find((step) => step.id === "target");
-  const cache = action.runs.steps.find((step) => step.uses === "actions/cache@v6");
+  const cache = action.runs.steps.find((step) => step.uses === "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
   assert.ok(normalize);
   assert.match(cache?.if ?? "", /steps\.target\.outputs\.repository == 'openclaw\/openclaw'/u);
   assert.match(cache?.if ?? "", /env\.CLAWSWEEPER_RUNNER != 'openclaw'/u);
@@ -1449,8 +1449,8 @@ test("exact event review publishes directly with a queue-bounded canonical fallb
     (create.run ?? "").indexOf("mkdir -p .artifacts") <
       (create.run ?? "").indexOf("exact-review-bundle create"),
   );
-  assert.equal(upload.uses, "actions/upload-artifact@v7");
-  assert.equal(failureDiagnostics.uses, "actions/upload-artifact@v7");
+  assert.equal(upload.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
+  assert.equal(failureDiagnostics.uses, "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a");
   assert.equal(failureDiagnostics["continue-on-error"], true);
   assert.match(
     failureDiagnostics.if ?? "",
@@ -1865,12 +1865,12 @@ test("exact event review publishes directly with a queue-bounded canonical fallb
     "${{ steps.publication-context.outputs.item_number }}",
   );
   const publisherCheckout = publisher.steps.find(
-    (candidate) => candidate.uses === "actions/checkout@v7" && candidate.if,
+    (candidate) => candidate.uses === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" && candidate.if,
   );
   assert.ok(publisherCheckout);
   assert.equal(publisherCheckout.with?.ref, "main");
   assert.match(publisherCheckout.if ?? "", /direct_lifecycle_recovery != 'true'/);
-  assert.equal(download.uses, "actions/download-artifact@v8");
+  assert.equal(download.uses, "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c");
   assert.match(download.if ?? "", /direct_lifecycle_recovery != 'true'/);
   assert.equal(download["continue-on-error"], true);
   assert.equal(download.with?.name, "${{ steps.publication-context.outputs.artifact_name }}");
@@ -2470,7 +2470,7 @@ test("exact event workflow binds all work to the canonical queue claim", () => {
   const eventEnd = workflow.indexOf("\n  event-review-publish:", eventStart);
   const eventJob = workflow.slice(eventStart, eventEnd);
   const claimStart = eventJob.indexOf("- name: Claim exact-review queue lease");
-  const checkoutStart = eventJob.indexOf("- uses: actions/checkout@v7", claimStart);
+  const checkoutStart = eventJob.indexOf("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", claimStart);
   const claimStep = eventJob.slice(claimStart, checkoutStart);
   const claimedWork = eventJob.slice(checkoutStart);
 
@@ -2620,7 +2620,7 @@ test("exact event workflow keeps both queue protocol versions live during rollin
   const eventEnd = workflow.indexOf("\n  target-fanout:", eventStart);
   const eventJob = workflow.slice(eventStart, eventEnd);
   const claimStart = eventJob.indexOf("- name: Claim exact-review queue lease");
-  const checkoutStart = eventJob.indexOf("- uses: actions/checkout@v7", claimStart);
+  const checkoutStart = eventJob.indexOf("- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", claimStart);
   const claimStep = eventJob.slice(claimStart, checkoutStart);
   const completeStart = eventJob.indexOf("- name: Complete exact-review queue lease");
   const completeEnd = eventJob.indexOf("\n      - ", completeStart + 1);
@@ -2720,7 +2720,7 @@ test("terminal exact-review runs reconcile through a signed isolated backstop", 
   assert.match(eventJob, /--max-time 120/);
   assert.match(eventJob, /--data-binary "\$payload"/);
   assert.match(eventJob, /\/internal\/exact-review\/reconcile/);
-  assert.match(eventJob, /actions\/checkout@v7/);
+  assert.match(eventJob, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(eventJob, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
   assert.match(eventJob, /persist-credentials: false/);
   assert.match(observerJob, /node scripts\/review-run-observer\.mjs --event-file/);
@@ -2739,7 +2739,7 @@ test("terminal exact-review runs reconcile through a signed isolated backstop", 
   assert.match(sweepJob, /terminal_runs: terminalRuns/);
   assert.match(sweepJob, /\/internal\/exact-review\/reconcile/);
   assert.match(sweepJob, /x-clawsweeper-exact-review-signature/);
-  assert.match(sweepJob, /actions\/checkout@v7/);
+  assert.match(sweepJob, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(sweepJob, /build-script: build/);
   assert.match(sweepJob, /name: Create target write token/);
   // GitHub's label endpoint lives under /issues but needs pull-requests write
@@ -2783,7 +2783,7 @@ test("failed-review retry cleanup restores the captured command failure", () => 
   const commandStart = retryJob.indexOf("- name: Plan or dispatch failed-review retries");
   const finalizerStart = retryJob.indexOf("- name: Finalize failed-review retry action ledger");
   const publicationStart = retryJob.indexOf("- name: Publish failed-review retry action ledger");
-  const artifactStart = retryJob.indexOf("uses: actions/upload-artifact@v7", publicationStart);
+  const artifactStart = retryJob.indexOf("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", publicationStart);
   const restoreStart = retryJob.indexOf("- name: Restore failed-review retry outcome");
 
   assert.ok(commandStart >= 0);
@@ -2957,11 +2957,11 @@ test("apply workflow isolates proof Codex and keeps mutation free of Git recover
   assert.match(applyJob, /Create target write token/);
   assert.match(applyJob, /Create state token/);
   assert.match(applyJob, /hydrate-state-blobs: "false"/);
-  assert.match(applyJob, /actions\/download-artifact@v8/);
+  assert.match(applyJob, /actions\/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c/);
   assert.doesNotMatch(
     applyJob.slice(
-      applyJob.indexOf("uses: actions/download-artifact@v8"),
-      applyJob.indexOf("uses: actions/download-artifact@v8") + 300,
+      applyJob.indexOf("uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"),
+      applyJob.indexOf("uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c") + 300,
     ),
     /continue-on-error/,
   );
@@ -5402,12 +5402,12 @@ test("apply proof and mutation start from fresh non-persisted source checkouts",
   const proofJob = workflow.slice(proofJobStart, proofPublisherStart);
   const applyJob = workflow.slice(applyJobStart);
 
-  assert.match(proofJob, /actions\/checkout@v7[\s\S]*?persist-credentials: false/);
+  assert.match(proofJob, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1[\s\S]*?persist-credentials: false/);
   assert.match(
     proofJob,
     /uses: \.\/\.github\/actions\/setup-state[\s\S]*?persist-credentials: "false"/,
   );
-  assert.match(applyJob, /actions\/checkout@v7[\s\S]*?persist-credentials: false/);
+  assert.match(applyJob, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1[\s\S]*?persist-credentials: false/);
   assert.doesNotMatch(proofJob, /git pull --rebase/);
   assert.doesNotMatch(applyJob, /git pull --rebase/);
 });
