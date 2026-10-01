@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Fail when a pull request body is missing the Arc Forge sections.
 
-The body must contain authored text under all four headings. HTML comments
+The body must contain authored text under all four headings, in any order.
+The template lists them in the upstream OpenClaw order; bodies written in
+the earlier Arc Forge order (Why before User Impact) still pass. HTML comments
 and placeholder lines do not count. Maintainer authorship does not skip this.
 """
 
@@ -13,8 +15,8 @@ from pathlib import Path
 
 REQUIRED = (
     "What Problem This Solves",
-    "Why This Change Was Made",
     "User Impact",
+    "Why This Change Was Made",
     "Evidence",
 )
 
@@ -63,7 +65,7 @@ def main(argv: list[str]) -> int:
             print(f"- {name}")
         print("Write them in the pull request body. A comment thread does not replace the body.")
         return 1
-    print("Pull request body includes problem, why, impact, and evidence.")
+    print("Pull request body includes problem, impact, why, and evidence.")
     return 0
 
 
