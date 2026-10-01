@@ -55,7 +55,7 @@ jobs:
       - name: Capture runner start timestamp
         run: echo "EXACT_REVIEW_BATCH_RUNNER_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           filter: blob:none
