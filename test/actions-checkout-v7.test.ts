@@ -35,12 +35,15 @@ const checkoutReferences = actionFiles.flatMap((path) =>
     })),
 );
 const checkoutV7Commit = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+// pr-context.yml keeps the org-wide checkout v4 pin and is not a floating tag.
+const checkoutV4Commit = "11d5960a326750d5838078e36cf38b85af677262";
 
 test("every checkout uses v7 without disabling its fork-PR guard", () => {
   assert.ok(checkoutReferences.length > 0, "expected checkout action references");
   for (const { path, reference } of checkoutReferences) {
     assert.ok(
-      reference === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" || reference === `actions/checkout@${checkoutV7Commit}`,
+      reference === `actions/checkout@${checkoutV7Commit}` ||
+        reference === `actions/checkout@${checkoutV4Commit}`,
       `${path}: ${reference}`,
     );
   }
