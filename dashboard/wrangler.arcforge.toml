@@ -1,5 +1,5 @@
 name = "clawsweeper-status"
-main = "worker.ts"
+main = "arcforge-entry.ts"
 account_id = "fdc03af65091401927c0557d895df743"
 compatibility_date = "2026-05-11"
 workers_dev = true
@@ -9,6 +9,8 @@ crons = ["*/5 * * * *"]
 
 [assets]
 directory = "./public"
+# Private-route checks must run before Cloudflare can serve static Bay assets.
+run_worker_first = true
 
 [[r2_buckets]]
 binding = "STATE_SNAPSHOTS"
