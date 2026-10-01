@@ -1,10 +1,7 @@
 import { exactReviewSourceRevisionMaterial } from "./exact-review-source-revision.ts";
 
 /** Bind signed gateway intake to live GitHub source before upstream sequencing. */
-export async function gatewaySourceDecision(
-  input: Record<string, any>,
-  live: Record<string, any>,
-) {
+export async function gatewaySourceDecision(input: Record<string, any>, live: Record<string, any>) {
   if (live.state !== "open") return null;
   const head = String(live.head?.sha || "").toLowerCase();
   const base = String(live.base?.sha || "").toLowerCase();
@@ -20,8 +17,7 @@ export async function gatewaySourceDecision(
     input.itemNumber !== live.number
   )
     throw new Error("Live gateway review source is incomplete");
-  if (input.sourceHeadSha && String(input.sourceHeadSha).toLowerCase() !== head)
-    return null;
+  if (input.sourceHeadSha && String(input.sourceHeadSha).toLowerCase() !== head) return null;
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(JSON.stringify(material)),
@@ -32,10 +28,7 @@ export async function gatewaySourceDecision(
     itemNumber: input.itemNumber,
     itemKind: "pull_request",
     sourceEvent: "pull_request",
-    sourceAction:
-      input.sourceAction === "comment_review"
-        ? "re_review"
-        : input.sourceAction,
+    sourceAction: input.sourceAction === "comment_review" ? "re_review" : input.sourceAction,
     supersedesInProgress: true,
     sourceHeadSha: head,
     sourceBaseSha: base,

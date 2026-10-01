@@ -104,20 +104,34 @@ test("private enrollment and coordinator are explicit and validated", () => {
 });
 
 test("operator jobs reflect actual execution without exposing lease authority", async () => {
-  const item = fixture(), data = new Map();
+  const item = fixture(),
+    data = new Map();
   item.decision = item.leaseDecision!;
-  const store = {get:(k:string)=>data.get(k),put:(k:string,v:unknown)=>data.set(k,v)};
-  gatewayExecution(store,[item],"take",{owner:randomUUID()},1);
-  const jobs = (gatewayExecution(store,[item],"jobs",{},2).body as any).jobs;
-  assert.equal(jobs[0].state,"leased");
-  assert.equal(jobs[0].execution,"running");
-  assert.equal(jobs[0].run_id,"123");
-  for (const key of ["owner","lease_id","claim_generation","decision"]) assert.equal(key in jobs[0],false);
-  const r=await worker.fetch(new Request("https://fixture.test/internal/exact-review/gateway/jobs",{method:"POST",body:"{}"}),{EXACT_REVIEW_PRIVATE_GATEWAY:"1",EXACT_REVIEW_OPERATOR_SECRET:"test-secret"});
-  assert.equal(r.status,401);
+  const store = { get: (k: string) => data.get(k), put: (k: string, v: unknown) => data.set(k, v) };
+  gatewayExecution(store, [item], "take", { owner: randomUUID() }, 1);
+  const jobs = (gatewayExecution(store, [item], "jobs", {}, 2).body as any).jobs;
+  assert.equal(jobs[0].state, "leased");
+  assert.equal(jobs[0].execution, "running");
+  assert.equal(jobs[0].run_id, "123");
+  for (const key of ["owner", "lease_id", "claim_generation", "decision"])
+    assert.equal(key in jobs[0], false);
+  const r = await worker.fetch(
+    new Request("https://fixture.test/internal/exact-review/gateway/jobs", {
+      method: "POST",
+      body: "{}",
+    }),
+    { EXACT_REVIEW_PRIVATE_GATEWAY: "1", EXACT_REVIEW_OPERATOR_SECRET: "test-secret" },
+  );
+  assert.equal(r.status, 401);
 });
 
 test("operator jobs rejects oversized bodies even without a content-length", async () => {
-  const r=await worker.fetch(new Request("https://fixture.test/internal/exact-review/gateway/jobs",{method:"POST",body:"x".repeat(16385)}),{EXACT_REVIEW_PRIVATE_GATEWAY:"1",EXACT_REVIEW_OPERATOR_SECRET:"test-secret"});
-  assert.equal(r.status,413);
+  const r = await worker.fetch(
+    new Request("https://fixture.test/internal/exact-review/gateway/jobs", {
+      method: "POST",
+      body: "x".repeat(16385),
+    }),
+    { EXACT_REVIEW_PRIVATE_GATEWAY: "1", EXACT_REVIEW_OPERATOR_SECRET: "test-secret" },
+  );
+  assert.equal(r.status, 413);
 });

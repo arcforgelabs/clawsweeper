@@ -1154,7 +1154,11 @@ export default {
     if (url.pathname === "/internal/exact-review/gateway/jobs" && request.method === "POST") {
       const body = await boundedCommandProofBody(request, 16384);
       if (body === null) return json({ error: "too_large" }, 413);
-      return authenticatedExactReviewOperatorRequest(new Request(request, { body }), env, "/gateway/jobs");
+      return authenticatedExactReviewOperatorRequest(
+        new Request(request, { body }),
+        env,
+        "/gateway/jobs",
+      );
     }
     if (
       /^\/internal\/exact-review\/gateway\/(take|heartbeat|finish|status|overview)$/.test(
@@ -6698,7 +6702,10 @@ function bayLifecycleTimingHistory(value) {
   return { bucket_minutes: 5, points: result };
 }
 
-async function boundedCommandProofBody(request: Request, maxBytes = 128 * 1024): Promise<string | null> {
+async function boundedCommandProofBody(
+  request: Request,
+  maxBytes = 128 * 1024,
+): Promise<string | null> {
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -6826,22 +6833,12 @@ async function authenticatedHostedTargetQueueRequest(request, env, path: string)
   ) {
     if (!privateReviewTargetAllowed(env, targetRepo))
       return json({ error: "gateway_target_not_enrolled" }, 403);
-    if (
-      !Number.isSafeInteger(decision.itemNumber) ||
-      Number(decision.itemNumber) < 1
-    )
+    if (!Number.isSafeInteger(decision.itemNumber) || Number(decision.itemNumber) < 1)
       return json({ error: "invalid_gateway_item" }, 400);
     const credentials = githubAppCredentials(env);
     if (!credentials) return json({ error: "gateway_app_not_configured" }, 503);
-    const appJwt = await signGithubAppJwt(
-      credentials.issuer,
-      credentials.privateKey,
-    );
-    const installationId = await githubAppInstallationId(
-      appJwt,
-      targetRepo,
-      env,
-    );
+    const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
+    const installationId = await githubAppInstallationId(appJwt, targetRepo, env);
     const token = await createGithubAppTokenFor({
       env,
       appJwt,
@@ -6860,10 +6857,7 @@ async function authenticatedHostedTargetQueueRequest(request, env, path: string)
     });
     const verified = await gatewaySourceDecision(decision, live);
     if (!verified)
-      return json(
-        { ok: true, accepted: false, reason: "source_not_current_or_open" },
-        202,
-      );
+      return json({ ok: true, accepted: false, reason: "source_not_current_or_open" }, 202);
     body = JSON.stringify({
       delivery_id: envelope.delivery_id,
       decision: verified,
