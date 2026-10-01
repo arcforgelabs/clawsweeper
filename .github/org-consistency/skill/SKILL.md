@@ -12,8 +12,8 @@ Use this for Arc Forge issue and pull request work. The source of this skill is 
 Create or update the body from `.github/pull_request_template.md`. These four sections need authored text:
 
 - What Problem This Solves
-- Why This Change Was Made
 - User Impact
+- Why This Change Was Made
 - Evidence
 
 HTML comments and placeholders such as `tbd`, `n/a`, and `not tested` do not count. Maintainer authorship does not skip the sections.
