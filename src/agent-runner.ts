@@ -249,9 +249,9 @@ export function runAgentCheckoutInspection(options: {
       model: gateway ? "gateway-agent-config" : openclawModel(env),
       cwd: options.cwd,
       env,
-      // Native and gateway startup include provider and session initialization.
-      // Keep the challenge bounded by the overall review budget.
-      timeoutMs: Math.min(remainingMs(), gateway || native ? 90_000 : 30_000),
+      // Gateway probes share subscription inference capacity with concurrent reviews.
+      // Allow startup/tool-read latency while retaining the overall review deadline.
+      timeoutMs: Math.min(remainingMs(), gateway ? 300_000 : native ? 90_000 : 30_000),
       ...(native && !gateway ? { reasoningEffort: "low" } : {}),
       checkoutInspection: { expectedText: challenge.text, expectedPath: challenge.path },
       ...(options.checkoutDiagnosticPath
