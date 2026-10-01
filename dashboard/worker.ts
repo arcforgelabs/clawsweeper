@@ -1,3 +1,8 @@
+import {
+  reviewCoordinatorRepository,
+  configuredReviewRepositories,
+  privateReviewTargetAllowed,
+} from "./review-coordinator.ts";
 import { publicTimestamp } from "./public-timestamp.ts";
 import {
   publicBayActivityKind,
@@ -73,6 +78,7 @@ import {
   exactReviewActionsReadToken,
   exactReviewClaimedRuns,
   exactReviewRepositoryToken,
+  exactReviewPrivateTargetMetadataToken,
   exactReviewRequestedRuns,
   exactReviewTerminalRun,
   exactReviewTerminalRuns,
@@ -398,7 +404,7 @@ const HEALTH_HISTORY_KEY_PREFIX = "health-history:";
 const APPLY_OBSERVABILITY_KEY_PREFIX = "apply-observability:";
 const APPLY_OBSERVABILITY_BUCKET_KEY_PREFIX = `${APPLY_OBSERVABILITY_KEY_PREFIX}day:`;
 const APPLY_OBSERVABILITY_LEGACY_LIMIT = 5_000;
-const CLAWSWEEPER_REVIEW_REPO = "openclaw/clawsweeper";
+
 const CLAWSWEEPER_STATE_REPO = "openclaw/clawsweeper-state";
 const CLAWSWEEPER_STATE_REF = "state";
 const CLUSTER_REPAIR_INTAKE_WORKFLOW = "repair-cluster-intake.yml";
@@ -1132,6 +1138,32 @@ export class StatusStore {
 export default {
   async fetch(request: Request, env: DashboardEnv = {}, ctx?: DashboardContext) {
     const url = new URL(request.url);
+    // Private gateway deployments expose no queue, record, lifecycle or asset data.
+    if (
+      env.EXACT_REVIEW_PRIVATE_GATEWAY === "1" &&
+      !url.pathname.startsWith("/internal/") &&
+      url.pathname !== "/github/webhook" &&
+      url.pathname !== "/api/health"
+    ) {
+      return json(
+        { service: "clawsweeper-status", visibility: "private", review_capacity: 5 },
+        200,
+      );
+    }
+    if (
+      /^\/internal\/exact-review\/gateway\/(take|heartbeat|finish|status|overview)$/.test(
+        url.pathname,
+      ) &&
+      request.method === "POST"
+    ) {
+      if (Number(request.headers.get("content-length") || 0) > 16384)
+        return json({ error: "too_large" }, 413);
+      return authenticatedExactReviewQueueRequest(
+        request,
+        env,
+        url.pathname.slice("/internal/exact-review".length),
+      );
+    }
     if (
       url.hostname.includes("-ingest.") &&
       url.pathname !== "/api/events" &&
@@ -4208,9 +4240,9 @@ async function githubWebhook(request, env, ctx) {
   const dispatchToken = await createGithubAppTokenFor({
     env,
     appJwt,
-    installationId: await githubAppInstallationId(appJwt, CLAWSWEEPER_REVIEW_REPO, env),
-    label: CLAWSWEEPER_REVIEW_REPO,
-    repositories: [repoName(CLAWSWEEPER_REVIEW_REPO)],
+    installationId: await githubAppInstallationId(appJwt, reviewCoordinatorRepository(env), env),
+    label: reviewCoordinatorRepository(env),
+    repositories: [repoName(reviewCoordinatorRepository(env))],
     permissions: { contents: "write" },
   });
 
@@ -4266,7 +4298,7 @@ async function workerHostedTargetEligibility(
     ? env.hostedTargetConfiguredRepositories.filter(
         (value): value is string => typeof value === "string",
       )
-    : undefined;
+    : configuredReviewRepositories(env);
   return resolveHostedTargetEligibility(targetRepo, fetch, {
     ...(configuredRepositories ? { configuredRepositories } : {}),
     ...(typeof env.hostedTargetPredicate === "function"
@@ -4288,8 +4320,11 @@ async function workerHostedTargetVisibilityAdmission(
     return normalizeHostedTargetAdmission(await injected(targetRepo));
   }
   try {
-    const token = await exactReviewRepositoryToken(env, { metadata: "read" });
+    const token = privateReviewTargetAllowed(env, targetRepo)
+      ? await exactReviewPrivateTargetMetadataToken(env, targetRepo)
+      : await exactReviewRepositoryToken(env, { metadata: "read" });
     return probeHostedPublicTarget(targetRepo, token, fetch, {
+      allowPrivate: privateReviewTargetAllowed(env, targetRepo),
       apiUrl: (path) => githubApiUrl(env, path),
     });
   } catch (error) {
@@ -7586,7 +7621,7 @@ async function dispatchClawsweeperComment({
   await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/dispatches`,
+    path: `/repos/${reviewCoordinatorRepository(env)}/dispatches`,
     method: "POST",
     body: {
       event_type: "clawsweeper_comment",

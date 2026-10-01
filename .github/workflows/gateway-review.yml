@@ -1,0 +1,21 @@
+name: Gateway exact review
+on:
+  repository_dispatch:
+    types: [clawsweeper_item]
+permissions:
+  contents: read
+jobs:
+  review:
+    if: github.repository == 'arcforgelabs/clawsweeper'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      # Only trusted default-branch adapter code; never check out the target PR here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Claim upstream lease and await gateway publication
+        env:
+          CLAWSWEEPER_WEBHOOK_SECRET: ${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}
+        run: node scripts/arcforge/gateway-review-run.mjs

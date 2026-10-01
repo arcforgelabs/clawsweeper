@@ -533,10 +533,11 @@ export function createReportCommentHelpers(
           !Number.isSafeInteger(Number(number)) ||
           !headSha ||
           timestampMs(frontMatterValue(markdown, "reviewed_at")) === null ||
-          !validReviewLeaseIdentity(
-            frontMatterValue(markdown, "review_lease_owner"),
-            frontMatterValue(markdown, "review_lease_comment_id"),
-          ),
+          (globalThis.process?.env?.CLAWSWEEPER_FORMAL_REVIEW !== "1" &&
+            !validReviewLeaseIdentity(
+              frontMatterValue(markdown, "review_lease_owner"),
+              frontMatterValue(markdown, "review_lease_comment_id"),
+            )),
         "Bind the durable review identity",
         "Record the exact pull request, head, review time, and owned lease before publishing readiness.",
       );
