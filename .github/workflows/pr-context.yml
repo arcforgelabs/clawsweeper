@@ -24,5 +24,5 @@ jobs:
           REPO: ${{ github.repository }}
         run: gh pr view "$PR_NUMBER" --repo "$REPO" --json body --jq .body > "$RUNNER_TEMP/pr-body.md"
 
-      - name: Require problem, why, impact, and evidence
+      - name: Require problem, impact, why, and evidence
         run: python3 .github/org-consistency/pr-context-check.py "$RUNNER_TEMP/pr-body.md"
