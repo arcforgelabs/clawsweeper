@@ -669,7 +669,7 @@ review_comment_id: unknown
 review_comment_url: unknown
 decision: ${options.decision.decision}
 close_reason: ${options.decision.closeReason}
-${options.decision.oversizedPullRequestSource ? `oversized_pr_source: ${JSON.stringify(options.decision.oversizedPullRequestSource)}\n` : ""}
+${options.decision.closeDestination ? `close_destination: ${JSON.stringify(options.decision.closeDestination)}\n` : ""}${options.decision.oversizedPullRequestSource ? `oversized_pr_source: ${JSON.stringify(options.decision.oversizedPullRequestSource)}\n` : ""}
 ${options.decision.oversizedPullRequest ? `oversized_pull_request: ${JSON.stringify(options.decision.oversizedPullRequest)}\n` : ""}
 confidence: ${options.decision.confidence}
 action_taken: ${options.action.actionTaken}
@@ -759,7 +759,7 @@ ${regressionPublicLines || "Regression provenance: not assessed."}
 ## Decision
 
 ${options.decision.decision === "close" ? "Close" : "Keep open"}: ${closeReasonText(options.decision.closeReason)}
-
+${options.decision.closeDestination ? `\nBelongs in: ${options.decision.closeDestination.repo} (${options.decision.closeDestination.visionPath}${options.decision.closeDestination.visionLine === null ? "" : `:${options.decision.closeDestination.visionLine}`})\n` : ""}
 Confidence: ${options.decision.confidence}
 
 Action taken: ${options.action.actionTaken}

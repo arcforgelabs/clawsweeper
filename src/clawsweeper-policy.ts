@@ -530,6 +530,7 @@ export const ALLOWED_REASONS = new Set<CloseReason>([
   "mostly_implemented_on_main",
   "cannot_reproduce",
   "clawhub",
+  "belongs_elsewhere",
   "duplicate_or_superseded",
   "low_signal_unmergeable_pr",
   "oversized_pull_request",
@@ -736,6 +737,7 @@ export const ROOT_CAUSE_RELATIONSHIPS = new Set<RootCauseRelationship>([
 export const DECISION_SCHEMA_KEYS = new Set([
   "decision",
   "closeReason",
+  "closeDestination",
   "confidence",
   "summary",
   "changeSummary",

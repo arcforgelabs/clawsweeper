@@ -5,6 +5,7 @@
   "required": [
     "decision",
     "closeReason",
+    "closeDestination",
     "confidence",
     "summary",
     "changeSummary",
@@ -75,6 +76,7 @@
         "mostly_implemented_on_main",
         "cannot_reproduce",
         "clawhub",
+        "belongs_elsewhere",
         "duplicate_or_superseded",
         "low_signal_unmergeable_pr",
         "oversized_pull_request",
@@ -90,6 +92,34 @@
         "stale_insufficient_info",
         "none"
       ]
+    },
+    "closeDestination": {
+      "description": "Only for closeReason belongs_elsewhere; null for every other reason. The repository this work belongs in according to the reviewed repository's VISION.md, plus the VISION.md line that says so. Add an evidence entry whose file is the same VISION.md path.",
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["repo", "visionPath", "visionLine", "visionQuote"],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$",
+          "description": "Destination owner/repository, for example openclaw/openclaw. Must differ from the reviewed repository."
+        },
+        "visionPath": {
+          "type": "string",
+          "description": "Repository-relative path of the cited VISION.md, usually VISION.md."
+        },
+        "visionLine": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "description": "1-based line number of the quoted text, or null when unknown."
+        },
+        "visionQuote": {
+          "type": "string",
+          "maxLength": 400,
+          "pattern": "^[^\\r\\n\\u2028\\u2029]+$",
+          "description": "The VISION.md text, verbatim on one line, that places this work in the destination repository."
+        }
+      }
     },
     "confidence": {
       "type": "string",

@@ -10,6 +10,8 @@ export function closeReasonText(reason: CloseReason): string {
       return "cannot reproduce on current main";
     case "clawhub":
       return "belongs on ClawHub";
+    case "belongs_elsewhere":
+      return "belongs in another repository";
     case "duplicate_or_superseded":
       return "duplicate or superseded";
     case "low_signal_unmergeable_pr":

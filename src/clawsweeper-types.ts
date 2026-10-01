@@ -179,6 +179,7 @@ export type CloseReason =
   | "mostly_implemented_on_main"
   | "cannot_reproduce"
   | "clawhub"
+  | "belongs_elsewhere"
   | "duplicate_or_superseded"
   | "low_signal_unmergeable_pr"
   | "oversized_pull_request"
@@ -520,6 +521,22 @@ export type PublicRegressionProvenance =
  * A non-blaming, preliminary regression signal. It intentionally cannot name
  * a predecessor; that requires VerifiedRegressionProvenance instead.
  */
+/**
+ * Where a `belongs_elsewhere` recommendation sends the work, anchored on the
+ * target repository's VISION.md line that says so. Recommend-only: no
+ * repository profile may auto-apply this reason.
+ */
+export interface CloseDestination {
+  /** Destination owner/repository, for example `openclaw/openclaw`. */
+  repo: string;
+  /** Repository-relative path of the VISION.md that was cited. */
+  visionPath: string;
+  /** 1-based line of the cited text, or null when the line is unknown. */
+  visionLine: number | null;
+  /** The VISION.md text, verbatim and on one line, that places the work elsewhere. */
+  visionQuote: string;
+}
+
 export interface RegressionAssessment {
   confidence: "suspected" | "probable";
   supportingEvidence: RegressionSupportingEvidence[];
@@ -571,6 +588,8 @@ export interface Decision {
   oversizedPullRequest?: import("./clawsweeper-oversized-pr-policy.js").OversizedPullRequestEvidence;
   decision: DecisionKind;
   closeReason: CloseReason;
+  /** Set only for `belongs_elsewhere`; null or absent for every other reason. */
+  closeDestination?: CloseDestination | null;
   confidence: Confidence;
   summary: string;
   changeSummary: string;

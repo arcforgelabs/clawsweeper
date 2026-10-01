@@ -5,6 +5,7 @@ import {
 import { STALLED_UNPROVEN_PROOF_STATUSES } from "./clawsweeper-apply-guards.js";
 import { ALLOWED_REASONS, PR_AUTO_CLOSE_EXEMPT_LABELS } from "./clawsweeper-policy.js";
 import { isAutoCloseAllowed, repositoryProfileFor } from "./repository-profiles.js";
+import { belongsElsewhereDecisionBlockReason } from "./clawsweeper-close-destination.js";
 import type { ActionTaken, CloseReason, Decision, Evidence, Item } from "./clawsweeper-types.js";
 
 interface CloseDecisionWorkflowDependencies {
@@ -305,6 +306,21 @@ export function createCloseDecisionWorkflow({
         actionTaken: "skipped_invalid_decision",
         reason: "close decision is not high-confidence with an allowed close reason",
       };
+    }
+    if (decision.closeReason === "belongs_elsewhere") {
+      // Recommend-only: no profile can auto-apply it, so this check only
+      // explains why a recommendation is unusable before the policy check.
+      const belongsElsewhereBlock =
+        item.authorAssociation && isMaintainerAuthorAssociation(item.authorAssociation)
+          ? "belongs_elsewhere cannot close maintainer-authored items"
+          : belongsElsewhereDecisionBlockReason(item, decision);
+      if (belongsElsewhereBlock) {
+        return {
+          ok: false,
+          actionTaken: "skipped_invalid_decision",
+          reason: belongsElsewhereBlock,
+        };
+      }
     }
     if (!isAutoCloseAllowed(profile, item.kind, decision.closeReason)) {
       return {

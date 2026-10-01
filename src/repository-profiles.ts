@@ -23,6 +23,7 @@ export type RepositoryCloseReason =
   | "mostly_implemented_on_main"
   | "cannot_reproduce"
   | "clawhub"
+  | "belongs_elsewhere"
   | "duplicate_or_superseded"
   | "low_signal_unmergeable_pr"
   | "oversized_pull_request"
@@ -101,6 +102,11 @@ const OPENCLAW_CLOSE_REASONS: readonly RepositoryCloseReason[] = [
 
 const ALL_CLOSE_REASONS: readonly RepositoryCloseReason[] = [...OPENCLAW_CLOSE_REASONS, "none"];
 const CLOSE_REASON_SET = new Set<RepositoryCloseReason>(ALL_CLOSE_REASONS);
+// Reviewers may propose these, but no profile may auto-apply them. A maintainer
+// acts on the recommendation; see docs/belongs-elsewhere-close-policy.md.
+export const RECOMMEND_ONLY_CLOSE_REASONS: ReadonlySet<RepositoryCloseReason> = new Set([
+  "belongs_elsewhere",
+]);
 const ITEM_KIND_SET = new Set<RepositoryItemKind>(["issue", "pull_request"]);
 
 export const DEFAULT_TARGET_REPO = "openclaw/openclaw";
@@ -461,6 +467,8 @@ function closeRulesValue(
 
 function closeReasonValue(value: unknown, label: string): RepositoryCloseReason {
   const reason = stringValue(value, label) as RepositoryCloseReason;
+  if (RECOMMEND_ONLY_CLOSE_REASONS.has(reason))
+    throw new Error(`${label} close reason ${reason} is recommend-only and cannot be auto-applied`);
   if (!CLOSE_REASON_SET.has(reason))
     throw new Error(`${label} has unsupported close reason: ${reason}`);
   return reason;

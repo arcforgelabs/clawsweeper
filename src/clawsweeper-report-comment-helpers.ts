@@ -2,8 +2,14 @@ import {
   oversizedPullRequestComment,
   parseOversizedPullRequestEvidence,
 } from "./clawsweeper-oversized-pr-policy.js";
+import {
+  belongsElsewhereBlock,
+  belongsElsewhereIntro,
+  closeDestinationFromFrontMatter,
+} from "./clawsweeper-close-destination.js";
 import type {
   AgentsPolicyStatus,
+  CloseDestination,
   CloseReason,
   Decision,
   Evidence,
@@ -100,6 +106,7 @@ export function createReportCommentHelpers(
 
   function renderCloseComment(options: {
     reason: CloseReason;
+    closeDestination?: CloseDestination | null;
     summary: string;
     bestSolution?: string;
     reproductionAssessment?: string;
@@ -118,7 +125,14 @@ export function createReportCommentHelpers(
     const evidence = options.evidence.slice(0, 6).map(closeEvidenceLine);
     const likelyOwners = (options.likelyOwners ?? []).slice(0, 5).map(likelyOwnerLine);
     const summaryLine = sentence(options.summary);
-    const lines = [closeIntro(options.reason), "", summaryLine];
+    const destination =
+      options.reason === "belongs_elsewhere" ? (options.closeDestination ?? null) : null;
+    const lines = [
+      destination ? belongsElsewhereIntro(destination) : closeIntro(options.reason),
+      "",
+      summaryLine,
+    ];
+    if (destination) lines.push("", "**Where this belongs**", belongsElsewhereBlock(destination));
     if (options.fixedPullRequest?.confidence === "high") {
       lines.push(
         "",
@@ -199,6 +213,9 @@ export function createReportCommentHelpers(
       sanitizePublicSelfReferences(
         renderCloseComment({
           reason,
+          closeDestination: closeDestinationFromFrontMatter(
+            frontMatterValue(markdown, "close_destination"),
+          ),
           summary: reviewSectionValue(markdown, "summary"),
           bestSolution: reviewSectionValue(markdown, "bestSolution"),
           reproductionAssessment: reviewSectionValue(markdown, "reproductionAssessment"),
@@ -261,6 +278,7 @@ export function createReportCommentHelpers(
     }
     return renderCloseComment({
       reason: decision.closeReason,
+      closeDestination: decision.closeDestination ?? null,
       summary: decision.summary,
       bestSolution: decision.bestSolution,
       reproductionAssessment: decision.reproductionAssessment,

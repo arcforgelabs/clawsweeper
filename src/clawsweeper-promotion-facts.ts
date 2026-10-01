@@ -1,3 +1,4 @@
+import { closeDestinationFromFrontMatter } from "./clawsweeper-close-destination.js";
 import { parseOversizedPullRequestEvidence } from "./clawsweeper-oversized-pr-policy.js";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -94,10 +95,15 @@ export function createPullRequestPromotionFacts(
     const oversized = parseOversizedPullRequestEvidence(
       frontMatterValue(markdown, "oversized_pull_request"),
     );
+    const closeDestination =
+      closeReason === "belongs_elsewhere"
+        ? closeDestinationFromFrontMatter(frontMatterValue(markdown, "close_destination"))
+        : null;
     return {
       ...(closeReason === "oversized_pull_request" && oversized
         ? { oversizedPullRequest: oversized }
         : {}),
+      ...(closeDestination ? { closeDestination } : {}),
       decision: "close",
       closeReason,
       confidence: "high",
