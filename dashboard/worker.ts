@@ -3,6 +3,7 @@ import {
   configuredReviewRepositories,
   privateReviewTargetAllowed,
 } from "./review-coordinator.ts";
+import { gatewaySourceDecision } from "./gateway-intake.ts";
 import { publicTimestamp } from "./public-timestamp.ts";
 import {
   publicBayActivityKind,
@@ -6785,7 +6786,7 @@ async function authenticatedExactReviewQueueRequest(
 async function authenticatedHostedTargetQueueRequest(request, env, path: string) {
   const secret = stringEnv(env.CLAWSWEEPER_WEBHOOK_SECRET);
   if (!secret) return json({ error: "webhook_not_configured" }, 503);
-  const body = await request.text();
+  let body = await request.text();
   const signature = request.headers.get("x-clawsweeper-exact-review-signature") || "";
   if (!(await verifyGithubWebhookSignature({ secret, signature, bodyText: body }))) {
     return json({ error: "invalid_signature" }, 401);
@@ -6809,6 +6810,62 @@ async function authenticatedHostedTargetQueueRequest(request, env, path: string)
     "content-type": "application/json",
     [HOSTED_TARGET_ELIGIBILITY_HEADER]: targetRepo,
   });
+  // The upstream source-authority lane owns ordering and head verification.
+  // Raw enqueue cannot supersede an existing PR without its verified sequence.
+  const envelope = objectValue(parseJsonObject(body));
+  const decision = objectValue(envelope.decision);
+  if (
+    path === "/enqueue" &&
+    env.EXACT_REVIEW_PRIVATE_GATEWAY === "1" &&
+    decision.itemKind === "pull_request"
+  ) {
+    if (!privateReviewTargetAllowed(env, targetRepo))
+      return json({ error: "gateway_target_not_enrolled" }, 403);
+    if (
+      !Number.isSafeInteger(decision.itemNumber) ||
+      Number(decision.itemNumber) < 1
+    )
+      return json({ error: "invalid_gateway_item" }, 400);
+    const credentials = githubAppCredentials(env);
+    if (!credentials) return json({ error: "gateway_app_not_configured" }, 503);
+    const appJwt = await signGithubAppJwt(
+      credentials.issuer,
+      credentials.privateKey,
+    );
+    const installationId = await githubAppInstallationId(
+      appJwt,
+      targetRepo,
+      env,
+    );
+    const token = await createGithubAppTokenFor({
+      env,
+      appJwt,
+      installationId,
+      label: targetRepo,
+      repositories: [repoName(targetRepo)],
+      permissions: { pull_requests: "read" },
+    });
+    const live = await githubTokenJson({
+      env,
+      token,
+      path: `/repos/${targetRepo}/pulls/${decision.itemNumber}`,
+      method: "GET",
+      body: undefined,
+      errorLabel: "gateway intake source",
+    });
+    const verified = await gatewaySourceDecision(decision, live);
+    if (!verified)
+      return json(
+        { ok: true, accepted: false, reason: "source_not_current_or_open" },
+        202,
+      );
+    body = JSON.stringify({
+      delivery_id: envelope.delivery_id,
+      decision: verified,
+      installation_id: Number(installationId),
+    });
+    path = "/source-authority";
+  }
   if (path === "/enqueue") {
     headers.set(
       EXACT_REVIEW_AUTHENTICATED_BODY_FINGERPRINT_HEADER,
