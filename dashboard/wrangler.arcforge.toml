@@ -1,5 +1,5 @@
 name = "clawsweeper-status"
-main = "worker.ts"
+main = "arcforge-entry.ts"
 account_id = "fdc03af65091401927c0557d895df743"
 compatibility_date = "2026-05-11"
 workers_dev = true
@@ -9,6 +9,8 @@ crons = ["*/5 * * * *"]
 
 [assets]
 directory = "./public"
+# Private-route checks must run before Cloudflare can serve static Bay assets.
+run_worker_first = true
 
 [[r2_buckets]]
 binding = "STATE_SNAPSHOTS"
@@ -49,7 +51,7 @@ CLAWSWEEPER_REVIEW_WORKFLOW = "gateway-review.yml"
 CLAWSWEEPER_COORDINATOR_PUBLIC = "1"
 CLAWSWEEPER_APP_ID = "5115769"
 EXACT_REVIEW_PRIVATE_GATEWAY = "1"
-EXACT_REVIEW_ALLOWED_REPOSITORIES = "arcforgelabs/clawsweeper"
+EXACT_REVIEW_ALLOWED_REPOSITORIES = "arcforgelabs/clawsweeper,arcforgelabs/arc-forge-website,arcforgelabs/arc-forge-information-tech,arcforgelabs/dictate,arcforgelabs/lab-flow,arcforgelabs/arc-forge-deck,arcforgelabs/arc-forge-runtime,arcforgelabs/arc-forge-tools,arcforgelabs/forge-support,arcforgelabs/openclaw-deploy,arcforgelabs/arc-forge-customer-service,arcforgelabs/arc-forge-deck-app"
 CLAWSWEEPER_DASHBOARD_WORKFLOW_SOURCE = "poll"
 CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
 CLAWSWEEPER_CRABFLEET_URL = ""
