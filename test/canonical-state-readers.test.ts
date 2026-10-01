@@ -27,7 +27,7 @@ test("setup-state checks out only remaining git-backed operational paths", () =>
   assert.equal(action.inputs?.["ledger-source"], undefined);
   assert.ok(action.inputs?.["hydrate-git-state"]);
   const checkout = action.runs?.steps?.find((step) => step.name === "Check out operational state");
-  assert.equal(checkout?.uses, "actions/checkout@v7");
+  assert.equal(checkout?.uses, "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
   const sparse = String(checkout?.with?.["sparse-checkout"] ?? "");
   for (const path of ["/jobs/", "/results/", "/notifications/", "/apply-report.json"]) {
     assert.match(sparse, new RegExp(path.replaceAll("/", "\\/")));
