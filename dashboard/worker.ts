@@ -1155,7 +1155,7 @@ export default {
       const body = await boundedCommandProofBody(request, 16384);
       if (body === null) return json({ error: "too_large" }, 413);
       return authenticatedExactReviewOperatorRequest(
-        new Request(request, { body }),
+        new Request(request, { method: "POST", body }),
         env,
         "/gateway/jobs",
       );
