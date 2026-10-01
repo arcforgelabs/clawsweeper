@@ -144,7 +144,7 @@ jobs:
           permission-issues: read
           permission-pull-requests: read
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           token: ${{ steps.central-token.outputs.token }}
           filter: blob:none
@@ -186,7 +186,7 @@ jobs:
           CLAWSWEEPER_EXECUTION_RUNNER: ${{ vars.CLAWSWEEPER_EXECUTION_RUNNER || 'blacksmith-16vcpu-ubuntu-2404' }}
         run: pnpm run repair:publish-cluster-intake -- --recover
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: openclaw/gitcrawl-store
           token: ${{ steps.store-token.outputs.token }}

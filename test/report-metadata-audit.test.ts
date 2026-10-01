@@ -145,7 +145,7 @@ test("report metadata audit workflow is dispatch-only and read-only", () => {
   const workflow = parse(source);
   assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch"]);
   assert.deepEqual(workflow.permissions, { contents: "read" });
-  assert.match(source, /actions\/checkout@v7/);
+  assert.match(source, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
   assert.match(source, /\.\/\.github\/actions\/setup-pnpm/);
   assert.match(source, /CLAWSWEEPER_WEBHOOK_SECRET/);
   assert.match(source, /CLAWSWEEPER_EXACT_REVIEW_QUEUE_URL/);

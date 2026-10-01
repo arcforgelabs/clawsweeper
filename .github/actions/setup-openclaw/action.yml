@@ -20,7 +20,7 @@ runs:
 
     - name: Cache OpenClaw CLI and npm downloads
       if: ${{ env.CLAWSWEEPER_RUNNER == 'openclaw' }}
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: |
           ~/.npm
@@ -45,7 +45,7 @@ runs:
 
     - name: Cache OpenClaw source build
       if: ${{ env.CLAWSWEEPER_RUNNER == 'openclaw' && inputs['openclaw-source-ref'] != '' }}
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ~/.clawsweeper-repair/openclaw-source
         key: ${{ runner.os }}-node24-openclaw-source-${{ inputs['openclaw-source-ref'] }}-v1

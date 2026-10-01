@@ -57,13 +57,13 @@ test("checkout audit rejects the early helper sparse checkout from the reverted 
       assertNoInheritedSparseCheckout(
         [
           {
-            uses: "actions/checkout@v7",
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             with: {
               "sparse-checkout": "scripts/control-plane-curl.sh",
               "sparse-checkout-cone-mode": false,
             },
           },
-          { uses: "actions/checkout@v7" },
+          { uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" },
           { uses: "./.github/actions/setup-pnpm" },
         ],
         "reverted sweep job",
