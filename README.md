@@ -199,6 +199,9 @@ ClawSweeper may propose a close only when the item is clearly one of these:
 - implemented on current `main`
 - not reproducible on current `main`
 - better suited for ClawHub skill/plugin work than core
+- belongs in another repository that the target's `VISION.md` names, quoted
+  in the review; recommend-only, never auto-applied (see
+  [`docs/belongs-elsewhere-close-policy.md`](docs/belongs-elsewhere-close-policy.md))
 - duplicate or superseded by a canonical issue/PR
 - low-signal pull request whose branch is mostly unrelated or unmergeable churn
 - external low-rated pull request whose requested real-behavior proof never

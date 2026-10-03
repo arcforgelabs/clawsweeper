@@ -14,6 +14,10 @@ import {
   renderDecisionPacketPublicBlock,
 } from "./decision-packets.js";
 import { neutralizeReviewControlMarkers, renderReviewHistorySection } from "./review-history.js";
+import {
+  belongsElsewhereDecisionBlockReason,
+  closeDestinationFromFrontMatter,
+} from "./clawsweeper-close-destination.js";
 import type { CreateReportRenderingDependencies } from "./clawsweeper-report-rendering-dependencies.js";
 import type { createReportContextRendering } from "./clawsweeper-report-context.js";
 import type { createReportCommentHelpers } from "./clawsweeper-report-comment-helpers.js";
@@ -41,6 +45,7 @@ export function createReportCommentPresentation(
     labelTransitionJustificationsFromPublicReport,
     labelTransitionJustificationsMarkdown,
     likelyOwnerLine,
+    markdownRepository,
     mergeRiskOptionsFromReport,
     neutralizeOwnedSectionSpoofing,
     publicBeforeMergeBlock,
@@ -540,9 +545,24 @@ export function createReportCommentPresentation(
     } catch {
       // Malformed or ambiguous decision metadata must keep the report on the human-review path.
     }
+    // A belongs_elsewhere recommendation without a usable destination fails
+    // closed to the keep-open review instead of an unnamed "belongs elsewhere".
+    const unusableBelongsElsewhere =
+      reason === "belongs_elsewhere" &&
+      belongsElsewhereDecisionBlockReason(
+        { repo: markdownRepository(markdown) },
+        {
+          closeReason: reason,
+          closeDestination: closeDestinationFromFrontMatter(
+            frontMatterValue(markdown, "close_destination"),
+          ),
+          evidence: reportEvidence(markdown),
+        },
+      ) !== null;
     const body =
       decision === "close" &&
       reason !== "none" &&
+      !unusableBelongsElsewhere &&
       (!requiresMaintainerDecision ||
         reason === "unsponsored_feature_request" ||
         reason === "author_pr_budget_exceeded")

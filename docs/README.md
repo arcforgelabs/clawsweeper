@@ -150,6 +150,8 @@ poster or WebP over accumulated before/after sets.
 - [Obsolescence policies](obsolescence-close-policies.md) — active policy map
 - [Unsponsored feature policy](unsponsored-feature-close-policy.md) — active
 - [Product direction policy](product-direction-close-policy.md) — active
+- [Belongs-elsewhere recommendation](belongs-elsewhere-close-policy.md) —
+  active; recommend-only, never auto-applied
 - [Material SQLite change discussion proposal](sqlite-change-policy-proposal.md)
   — proposed; maintainer decision required before any enforcement
 - [Author PR budget policy](author-pr-budget-close-policy.md) — active

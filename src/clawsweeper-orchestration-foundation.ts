@@ -14,6 +14,7 @@ import {
   type PrSurfaceFile,
 } from "./pr-surface-stats.js";
 import { normalizeRepo } from "./repository-profiles.js";
+import { belongsElsewhereOutro } from "./clawsweeper-close-destination.js";
 import type { CreateReportOrchestrationDependencies } from "./clawsweeper-report-orchestration-dependencies.js";
 import type { createReportRendering } from "./clawsweeper-report-rendering.js";
 
@@ -62,6 +63,8 @@ export function createReportOrchestrationFoundation(
         return "Thanks for the report. I gave this a fresh shell check against current `main`, and I could not reproduce it anymore.";
       case "clawhub":
         return `Thanks for the idea. I checked the current extension path, and this is a better fit for ${markdownLink("ClawHub.com", targetProfile().communityUrl ?? "https://clawhub.ai/")} than OpenClaw core.`;
+      case "belongs_elsewhere":
+        return "Thanks for this. I checked this repository's `VISION.md`, and this work belongs in another repository rather than here.";
       case "duplicate_or_superseded":
         return "Thanks for the context here. I swept through the related work, and this is now duplicate or superseded.";
       case "low_signal_unmergeable_pr":
@@ -121,6 +124,8 @@ export function createReportOrchestrationFoundation(
         return "If the original problem still reproduces on current `main`, a fresh PR against the current code is very welcome.";
       case "not_actionable_in_repo":
         return "So I’m closing this as outside the OpenClaw source repository rather than keeping it open as core work.";
+      case "belongs_elsewhere":
+        return belongsElsewhereOutro();
       default:
         return "";
     }

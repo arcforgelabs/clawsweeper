@@ -91,6 +91,7 @@ import { derivedPrRating, normalizePrRating } from "./clawsweeper-rating.js";
 import { parseNextStep } from "./clawsweeper-next-step.js";
 import { parseMaintainerDecision } from "./decision-packets.js";
 import { DEFAULT_TARGET_REPO, normalizeRepo } from "./repository-profiles.js";
+import { parseCloseDestination } from "./clawsweeper-close-destination.js";
 
 export interface DecisionParserDependencies {
   isMaintainerAuthorAssociation: (value: unknown) => boolean;
@@ -1043,9 +1044,17 @@ export function createDecisionParser({
       record.nextStep === undefined
         ? undefined
         : parseNextStep(record.nextStep, "decision.nextStep");
+    const closeReason = requireEnum(record.closeReason, ALL_REASONS, "decision.closeReason");
+    // Shape errors throw like any schema violation. A destination on any other
+    // reason is dropped; a missing one is caught by the close-decision gate.
+    const closeDestination = parseCloseDestination(
+      record.closeDestination,
+      "decision.closeDestination",
+    );
     const decision: Decision = {
       decision: requireEnum(record.decision, DECISIONS, "decision.decision"),
-      closeReason: requireEnum(record.closeReason, ALL_REASONS, "decision.closeReason"),
+      closeReason,
+      ...(closeReason === "belongs_elsewhere" && closeDestination ? { closeDestination } : {}),
       confidence: requireEnum(record.confidence, CONFIDENCES, "decision.confidence"),
       summary: requireReportText(record.summary, "decision.summary"),
       changeSummary: requireReportText(record.changeSummary, "decision.changeSummary"),
