@@ -60,9 +60,9 @@ The controlled environment is Arc Haven, OpenClaw 2026.9.6 (`eb377ac`), Node 24,
 and an isolated candidate checkout based on `73186a07eb`.
 
 The actual `runOpenclawProcess` checkout-inspection path returned status 0 after
-reading a host-selected file through the saved Horizon login. Independently
+reading a host-selected file through the saved agent-owned login. Independently
 inspected native SQLite events matched the exact read path and successful tool
-result. The private host artifact is `/tmp/horizon-native-proof/adapter-proof.json`.
+result. The private host artifact is `/tmp/<agent>-native-proof/adapter-proof.json`.
 Separate real native reads returned undisclosed file contents; one retained
 session was `3f1974b5-c803-41f3-b531-1df9ab327e57`.
 
@@ -78,12 +78,12 @@ The local-only review of `arcforgelabs/arc-forge-tools` PR 106 completed on Arc
 Haven against head `167cfee2e6b2eeaf8f7bd7c9577026af304dc4f1`, producing a validated
 report with actionable findings and `local_checkout_access: verified`. It took
 917 seconds at high reasoning effort. The report and JSON result are retained
-on that host under `/tmp/horizon-native-proof/pr106-review.json`. No GitHub
+on that host under `/tmp/<agent>-native-proof/pr106-review.json`. No GitHub
 comment or approval was published. GitHub check-run hydration returned HTTP 403
 with the existing read credential, so CI visibility was unavailable.
 
 The final adapter also passed a fresh real checkout challenge using mixed-case
-`ClawSweeper`; `/tmp/horizon-native-proof/adapter-final-proof.json` records status 0. The full repository check has 14 failures reproduced in a clean checkout of
+`ClawSweeper`; `/tmp/<agent>-native-proof/adapter-final-proof.json` records status 0. The full repository check has 14 failures reproduced in a clean checkout of
 its base; the focused native/process suite passes all 19 tests. Documentation
 and CLI-label regression tests also pass. These baseline failures are not waived
 for unrelated future changes.
@@ -97,7 +97,7 @@ A live full-native boundary test on Arc Haven read `inside.txt` successfully and
 attempted a harmless canary outside its checkout. The retained tool result
 rejected the outside read with `Path escapes sandbox root`; the active catalog
 contained only the read capability (plus tool discovery/dispatch). Evidence is
-retained privately under `/tmp/horizon-readonly-boundary/`. This tests the real
+retained privately under `/tmp/<agent>-readonly-boundary/`. This tests the real
 read boundary, not arbitrary vulnerabilities in the underlying runtime.
 
 Native reviews expose `read` directly with tool search disabled. Full-review
@@ -109,10 +109,10 @@ Native full reviews forward the scanned `--output-schema` into OpenClaw's
 per-model `response_format` as strict JSON Schema. Prompt text alone had allowed
 extra model-generated decision fields, which the existing parser correctly
 rejected. Checkout challenges receive no response schema, and downstream
-validation is unchanged. A real Horizon OAuth probe on Arc Haven returned
+validation is unchanged. A real agent-owned OAuth probe on Arc Haven returned
 `{"receipt_7ae39":"schema-reached-provider"}` even though its prompt requested a
 plain word; that property and value were supplied only through the schema.
-Evidence is retained privately under `/tmp/horizon-schema-proof/`. A separate
+Evidence is retained privately under `/tmp/<agent>-schema-proof/`. A separate
 full-review run exercises the full decision schema; the small probe alone does
 not establish compatibility with every schema keyword.
 
