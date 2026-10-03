@@ -49,6 +49,9 @@ export interface RepositoryProfile {
   promptNote: string;
   applyCloseRules: Partial<Record<RepositoryItemKind, readonly RepositoryCloseReason[]>>;
   liveTest?: RepositoryLiveTestConfig;
+  // Root-level target files (for example VISION.md) whose default-branch blob
+  // revisions join the review policy hash. Absent means no target documents.
+  policyDocuments?: readonly string[];
 }
 
 interface TargetRepositoryConfig {
@@ -67,6 +70,7 @@ interface ConfiguredRepositoryProfile {
   promptNote: string;
   applyCloseRules: Partial<Record<RepositoryItemKind, readonly RepositoryCloseReason[]>>;
   liveTest?: RepositoryLiveTestConfig;
+  policyDocuments?: readonly string[];
 }
 
 interface GenericFallbackConfig {
@@ -77,6 +81,7 @@ interface GenericFallbackConfig {
   promptNote: string;
   applyCloseRules: Partial<Record<RepositoryItemKind, readonly RepositoryCloseReason[]>>;
   liveTest?: RepositoryLiveTestConfig;
+  policyDocuments?: readonly string[];
 }
 
 const OPENCLAW_CLOSE_REASONS: readonly RepositoryCloseReason[] = [
@@ -102,6 +107,7 @@ const OPENCLAW_CLOSE_REASONS: readonly RepositoryCloseReason[] = [
 const ALL_CLOSE_REASONS: readonly RepositoryCloseReason[] = [...OPENCLAW_CLOSE_REASONS, "none"];
 const CLOSE_REASON_SET = new Set<RepositoryCloseReason>(ALL_CLOSE_REASONS);
 const ITEM_KIND_SET = new Set<RepositoryItemKind>(["issue", "pull_request"]);
+const MAX_POLICY_DOCUMENTS = 8;
 
 export const DEFAULT_TARGET_REPO = "openclaw/openclaw";
 
@@ -228,6 +234,7 @@ function configuredRepositoryProfile(profile: ConfiguredRepositoryProfile): Repo
   if (profile.communityUrl) result.communityUrl = profile.communityUrl;
   const liveTest = profile.liveTest ?? genericFallbackConfigFor(targetRepo)?.liveTest;
   if (liveTest) result.liveTest = liveTest;
+  if (profile.policyDocuments) result.policyDocuments = profile.policyDocuments;
   return result;
 }
 
@@ -256,6 +263,7 @@ function fallbackRepositoryProfile(normalizedTargetRepo: string): RepositoryProf
     applyCloseRules: fallback.applyCloseRules,
   };
   if (fallback.liveTest) result.liveTest = fallback.liveTest;
+  if (fallback.policyDocuments) result.policyDocuments = fallback.policyDocuments;
   return result;
 }
 
@@ -356,6 +364,12 @@ function validateConfiguredRepositoryProfile(
     if (schemaVersion !== 2) throw new Error(`${label}.live_test requires schema_version 2`);
     result.liveTest = liveTestValue(profile.live_test, `${label}.live_test`);
   }
+  if (profile.policy_documents !== undefined) {
+    result.policyDocuments = policyDocumentsValue(
+      profile.policy_documents,
+      `${label}.policy_documents`,
+    );
+  }
   return result;
 }
 
@@ -439,6 +453,12 @@ function validateGenericFallbackConfig(
     if (schemaVersion !== 2) throw new Error(`${label}.live_test requires schema_version 2`);
     result.liveTest = liveTestValue(fallback.live_test, `${label}.live_test`);
   }
+  if (fallback.policy_documents !== undefined) {
+    result.policyDocuments = policyDocumentsValue(
+      fallback.policy_documents,
+      `${label}.policy_documents`,
+    );
+  }
   return result;
 }
 
@@ -476,6 +496,24 @@ function pathSegmentValue(value: unknown, label: string): string {
   const segment = stringValue(value, label);
   if (!/^[A-Za-z0-9_.-]+$/.test(segment)) throw new Error(`${label} must be a safe path segment`);
   return segment;
+}
+
+// Policy documents are root-level file names so one contents listing of the
+// default branch resolves all of them for both the planner and the reviewer.
+function policyDocumentsValue(value: unknown, label: string): readonly string[] {
+  const entries = arrayValue(value, label);
+  if (entries.length === 0 || entries.length > MAX_POLICY_DOCUMENTS) {
+    throw new Error(`${label} must list 1-${MAX_POLICY_DOCUMENTS} root-level file names`);
+  }
+  const names = entries.map((entry, index) => {
+    const name = pathSegmentValue(entry, `${label}[${index}]`);
+    if (name === "." || name === "..") {
+      throw new Error(`${label}[${index}] must be a root-level file name`);
+    }
+    return name;
+  });
+  if (new Set(names).size !== names.length) throw new Error(`${label} must not repeat a file`);
+  return Object.freeze(names);
 }
 
 function packageManagerValue(value: unknown, label: string): RepositoryPackageManager {

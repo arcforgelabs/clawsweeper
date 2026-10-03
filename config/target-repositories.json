@@ -187,6 +187,7 @@
       "package_manager": "pnpm",
       "validation_commands": [],
       "changed_gate": null,
+      "policy_documents": ["VISION.md", "AGENTS.md"],
       "live_test": {
         "enabled": false,
         "surface_default": "terminal",

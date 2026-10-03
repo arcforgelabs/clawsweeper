@@ -128,6 +128,23 @@ without a TypeScript change. It is intentionally narrow:
 This is enough for event-driven review after the target repo has the dispatcher
 workflow and GitHub App installation.
 
+## Policy Documents
+
+A repository entry or owner fallback may set `policy_documents` to a list of
+up to eight root-level file names, for example `["VISION.md", "AGENTS.md"]`.
+The planner and the reviewer each read the target's default-branch root
+listing once (`GET repos/{owner}/{repo}/contents`) and fold every listed
+file's blob SHA, or `absent`, into the review policy hash. Editing one of those
+files therefore changes the policy for every open item in that repository
+only: each item becomes due on the next plan and cannot reuse a cached
+keep-open verdict (see [Review Cache](review-cache.md)). Profiles without
+`policy_documents` make no extra request and keep their existing hash.
+
+Each listed file costs one full review of every open item in that repository
+whenever it changes on the default branch, so list only documents the review
+prompt actually judges against. Adding or changing the field itself also
+changes the profile, which re-reviews that owner's open items once.
+
 ## Add One Repository
 
 1. Install the ClawSweeper GitHub App on the target repository.
