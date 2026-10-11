@@ -1169,7 +1169,7 @@ export default {
       );
     }
     if (
-      /^\/internal\/exact-review\/gateway\/(take|heartbeat|finish|status|overview)$/.test(
+      /^\/internal\/exact-review\/gateway\/(take|heartbeat|finish|status|overview|usage)$/.test(
         url.pathname,
       ) &&
       request.method === "POST"

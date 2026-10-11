@@ -5,6 +5,7 @@ import type { ExactReviewQueueItem } from "./exact-review-queue.ts";
 export const GATEWAY_EXECUTION_TTL_MS = 120_000;
 type Store = { get(key: string): unknown; put(key: string, value: unknown): void };
 type Execution = { owner: string; expires: number; outcome?: "success" | "failure" };
+type Usage = { month: string; minutes: number; runs: Record<string, number> };
 export function gatewayTuple(item: ExactReviewQueueItem) {
   return {
     item_key: item.key,
@@ -51,6 +52,30 @@ export function gatewayExecution(
       store.put("gateway-executions-v1", records);
     },
   };
+  // Monthly coordinator runner minutes, for the hard cap in gateway-review.yml.
+  // Each run attempt reports once; the total resets with the UTC month.
+  if (action === "usage") {
+    const month = new Date(now).toISOString().slice(0, 7);
+    let usage = store.get("gateway-usage-v1") as Usage | undefined;
+    if (!usage || usage.month !== month) usage = { month, minutes: 0, runs: {} };
+    const minutes = body.minutes;
+    if (minutes !== undefined) {
+      const run = `${body.run_id}:${body.run_attempt}`;
+      if (
+        !Number.isInteger(minutes) ||
+        (minutes as number) < 1 ||
+        (minutes as number) > 120 ||
+        !/^[0-9]+:[0-9]+$/.test(run)
+      )
+        return result(400, { error: "invalid_usage" });
+      if (!(run in usage.runs)) {
+        usage.runs[run] = minutes as number;
+        usage.minutes += minutes as number;
+        store.put("gateway-usage-v1", usage);
+      }
+    }
+    return result(200, { month: usage.month, minutes: usage.minutes });
+  }
   if (action === "overview")
     return result(200, {
       pending: items.filter((i) => i.state === "pending").length,

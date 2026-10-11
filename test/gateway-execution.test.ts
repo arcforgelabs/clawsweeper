@@ -141,3 +141,22 @@ test("operator jobs rejects oversized bodies even without a content-length", asy
   );
   assert.equal(r.status, 413);
 });
+
+test("coordinator minutes count once per run attempt and reset each UTC month", () => {
+  const data = new Map();
+  const store = { get: (k: string) => data.get(k), put: (k: string, v: unknown) => data.set(k, v) };
+  const oct = Date.parse("2026-10-11T00:00:00Z");
+  const usage = (body: Record<string, unknown>, now = oct) =>
+    gatewayExecution(store, [], "usage", body, now);
+  assert.deepEqual(usage({}).body, { month: "2026-10", minutes: 0 });
+  assert.equal((usage({ run_id: "1", run_attempt: "1", minutes: 15 }).body as any).minutes, 15);
+  assert.equal((usage({ run_id: "1", run_attempt: "1", minutes: 15 }).body as any).minutes, 15);
+  assert.equal((usage({ run_id: "1", run_attempt: "2", minutes: 3 }).body as any).minutes, 18);
+  for (const bad of [0, 121, 1.5, "7"])
+    assert.equal(usage({ run_id: "2", run_attempt: "1", minutes: bad }).status, 400);
+  assert.equal(usage({ run_id: "x", run_attempt: "1", minutes: 1 }).status, 400);
+  assert.deepEqual(usage({}, Date.parse("2026-11-01T00:00:00Z")).body, {
+    month: "2026-11",
+    minutes: 0,
+  });
+});
