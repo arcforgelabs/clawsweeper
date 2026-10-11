@@ -44,6 +44,12 @@ import {
 import { inlineProofParticipation, publicInlineProofCohorts } from "./inline-proof-telemetry.ts";
 import { bayHtml } from "./bay-page.ts";
 import {
+  arcforgeActivityRepositories,
+  arcforgeActivityRoute,
+  postArcforgeHook,
+  validArcforgeHookUrl,
+} from "./arcforge-activity.ts";
+import {
   dashboardHtml,
   issueTriagePageConfig,
   prProofTriagePageConfig,
@@ -1151,6 +1157,8 @@ export default {
         200,
       );
     }
+    if (url.pathname === "/internal/arcforge/github-activity" && request.method === "POST")
+      return arcforgeGithubActivity(request, env);
     if (url.pathname === "/internal/exact-review/gateway/jobs" && request.method === "POST") {
       const body = await boundedCommandProofBody(request, 16384);
       if (body === null) return json({ error: "too_large" }, 413);
@@ -6793,6 +6801,74 @@ async function authenticatedExactReviewQueueRequest(
   );
   if (onAuthenticatedResponse) await onAuthenticatedResponse(body, response);
   return response;
+}
+
+// Arc Forge organization webhook: see arcforge-activity.ts for the event filter.
+async function arcforgeGithubActivity(request: Request, env: DashboardEnv) {
+  const webhookSecret = stringEnv(env.ARCFORGE_ACTIVITY_WEBHOOK_SECRET);
+  const queueSecret = stringEnv(env.CLAWSWEEPER_WEBHOOK_SECRET);
+  if (!webhookSecret || !queueSecret) return json({ error: "webhook_not_configured" }, 503);
+  const bodyText = await boundedCommandProofBody(request, 2 * 1024 * 1024);
+  if (bodyText === null) return json({ error: "too_large" }, 413);
+  const signatureOk = await verifyGithubWebhookSignature({
+    secret: webhookSecret,
+    signature: request.headers.get("x-hub-signature-256") || "",
+    bodyText,
+  });
+  if (!signatureOk) return json({ error: "invalid_signature" }, 401);
+  const eventName = request.headers.get("x-github-event") || "";
+  const deliveryId = request.headers.get("x-github-delivery") || "";
+  const event = parseJsonObject(bodyText);
+  if (!event || !deliveryId) return json({ error: "invalid_delivery" }, 400);
+  if (eventName === "ping") return json({ ok: true, event: "ping" }, 202);
+  const decision = await arcforgeActivityRoute(
+    eventName,
+    event,
+    deliveryId,
+    arcforgeActivityRepositories(env.ARCFORGE_ACTIVITY_REPOSITORIES),
+  );
+  if (decision.route === "ignore")
+    return json({ ok: true, accepted: false, reason: decision.reason }, 202);
+  if (decision.route === "queue") {
+    const body = JSON.stringify(decision.envelope);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(queueSecret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const digest = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+    const queued = await authenticatedHostedTargetQueueRequest(
+      new Request("https://clawsweeper.internal/internal/exact-review/enqueue", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-clawsweeper-exact-review-signature": `sha256=${hexEncode(new Uint8Array(digest))}`,
+        },
+        body,
+      }),
+      env,
+      "/enqueue",
+    );
+    const receipt = objectValue(await queued.json().catch(() => null));
+    if (queued.status >= 500) return json({ error: "queue_unavailable" }, 502);
+    return json(
+      {
+        ok: true,
+        accepted: receipt.ok === true,
+        route: "queue",
+        ...(receipt.ok === true ? {} : { reason: String(receipt.error || queued.status) }),
+      },
+      202,
+    );
+  }
+  const hookUrl = validArcforgeHookUrl(env.CLAWSWEEPER_OPENCLAW_HOOK_URL);
+  const hookToken = stringEnv(env.CLAWSWEEPER_OPENCLAW_HOOK_TOKEN);
+  if (!hookUrl || !hookToken) return json({ error: "hook_not_configured" }, 503);
+  if (!(await postArcforgeHook(hookUrl, hookToken, decision.payload)))
+    return json({ error: "hook_rejected" }, 502);
+  return json({ ok: true, accepted: true, route: "hook" }, 202);
 }
 
 async function authenticatedHostedTargetQueueRequest(request, env, path: string) {

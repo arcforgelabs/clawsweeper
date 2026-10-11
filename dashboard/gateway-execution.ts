@@ -97,7 +97,18 @@ export function gatewayExecution(
   );
   if (!item) return result(409, { error: "lease_not_active" });
   const record = executions.get(key(item)) as Execution | undefined;
-  if (action === "status") return result(200, { outcome: record?.outcome ?? null });
+  // `execution` lets the coordinator stop waiting when no executor holds the job.
+  if (action === "status")
+    return result(200, {
+      outcome: record?.outcome ?? null,
+      execution: record?.outcome
+        ? "finished"
+        : !record
+          ? "waiting"
+          : record.expires > now
+            ? "running"
+            : "stalled",
+    });
   if (!record || record.owner !== body.owner || record.expires <= now || record.outcome)
     return result(409, { error: "execution_not_owned" });
   if (action === "heartbeat") {
