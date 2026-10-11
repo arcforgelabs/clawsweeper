@@ -1115,13 +1115,18 @@ export class ExactReviewQueue {
       if (this.env.EXACT_REVIEW_PRIVATE_GATEWAY !== "1")
         return json({ error: "gateway_disabled" }, 404);
       const action = url.pathname.slice("/gateway/".length);
+      const state = this.readStateSync();
       const result = gatewayExecution(
         this.storage.kv,
-        Object.values(this.readStateSync().items),
+        Object.values(state.items),
         action,
         objectValue(await request.json().catch(() => null)),
         Date.now(),
       );
+      // Operators need to see why nothing dispatches; the dispatcher record holds
+      // only its state, reason and timestamps.
+      if (action === "overview" && result.status === 200)
+        return json({ ...(result.body as object), dispatcher: state.dispatcher ?? null });
       return json(result.body, result.status);
     }
     if (request.method === "POST" && url.pathname === "/admission-capabilities") {
