@@ -41,7 +41,13 @@ test("gateway restart recovers expired execution; old owner and superseded head 
     b = randomUUID();
   const call = (action: string, body: Record<string, unknown>, now = 1) =>
     gatewayExecution(store, [item], action, body, now);
+  assert.equal((call("status", gatewayTuple(item)).body as any).execution, "waiting");
   assert.ok((call("take", { owner: a }).body as any).job);
+  assert.equal((call("status", gatewayTuple(item)).body as any).execution, "running");
+  assert.equal(
+    (call("status", gatewayTuple(item), GATEWAY_EXECUTION_TTL_MS + 2).body as any).execution,
+    "stalled",
+  );
   assert.equal((call("take", { owner: b }).body as any).job, null);
   assert.equal(call("heartbeat", { ...gatewayTuple(item), owner: a }).status, 200);
   const later = GATEWAY_EXECUTION_TTL_MS + 2;

@@ -12,6 +12,29 @@ through `/gateway/finish`. The workflow heartbeats and acknowledges completion.
 Deploying the workflow without that companion executor leaves it waiting; the
 rollout must prove one complete canary before enrolling repositories.
 
+The coordinator job runs on a GitHub-hosted runner because this repository is
+public and the ClawSweeper runner group denies public repositories. Public-repo
+minutes are free, but a job that waits on a stopped gateway still occupies a
+runner for its full deadline, so `gateway-review-run.mjs` gives the claim back to
+the upstream retry path after 15 minutes without executor progress. The
+`/gateway/status` response reports `execution` as `waiting`, `running`,
+`stalled` or `finished` for that check.
+
+## Activity intake
+
+An `arcforgelabs` organization webhook sends `issues`, `issue_comment` and
+`pull_request` events to `/internal/arcforge/github-activity`, signed with
+`ARCFORGE_ACTIVITY_WEBHOOK_SECRET`. `dashboard/arcforge-activity.ts` applies the
+filter the retired per-repository `clawsweeper-activity.yml` Actions job used:
+pull requests and maintainer `@clawsweeper review` commands on pull requests
+enter the durable queue; opened or reopened issues and review commands on issues
+go to the OpenClaw hook at `team.arcforge.au/hooks/agent`
+(`CLAWSWEEPER_OPENCLAW_HOOK_TOKEN`) as an admission-only request, because GitHub
+abandons a delivery after ten seconds. Only repositories in
+`ARCFORGE_ACTIVITY_REPOSITORIES` are routed. Failed deliveries appear in the
+webhook's recent deliveries and can be redelivered there. No Actions minutes are
+spent on intake.
+
 This adapter retains the upstream intake, supersession, retry and dead-letter
 machinery. The gateway execution ownership records live in the same queue
 Durable Object and are bounded by active upstream claims. A 120-second execution
