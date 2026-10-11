@@ -28,8 +28,8 @@ An `arcforgelabs` organization webhook sends `issues`, `issue_comment` and
 filter the retired per-repository `clawsweeper-activity.yml` Actions job used:
 pull requests and maintainer `@clawsweeper review` commands on pull requests
 enter the durable queue; opened or reopened issues and review commands on issues
-go to the OpenClaw hook (`CLAWSWEEPER_OPENCLAW_HOOK_URL` and
-`CLAWSWEEPER_OPENCLAW_HOOK_TOKEN`) as an admission-only request, because GitHub
+go to the OpenClaw hook at `team.arcforge.au/hooks/agent`
+(`CLAWSWEEPER_OPENCLAW_HOOK_TOKEN`) as an admission-only request, because GitHub
 abandons a delivery after ten seconds. Only repositories in
 `ARCFORGE_ACTIVITY_REPOSITORIES` are routed. Failed deliveries appear in the
 webhook's recent deliveries and can be redelivered there. No Actions minutes are

@@ -46,8 +46,8 @@ import { bayHtml } from "./bay-page.ts";
 import {
   arcforgeActivityRepositories,
   arcforgeActivityRoute,
+  ARCFORGE_HOOK_URL,
   postArcforgeHook,
-  validArcforgeHookUrl,
 } from "./arcforge-activity.ts";
 import {
   dashboardHtml,
@@ -6863,10 +6863,9 @@ async function arcforgeGithubActivity(request: Request, env: DashboardEnv) {
       202,
     );
   }
-  const hookUrl = validArcforgeHookUrl(env.CLAWSWEEPER_OPENCLAW_HOOK_URL);
   const hookToken = stringEnv(env.CLAWSWEEPER_OPENCLAW_HOOK_TOKEN);
-  if (!hookUrl || !hookToken) return json({ error: "hook_not_configured" }, 503);
-  if (!(await postArcforgeHook(hookUrl, hookToken, decision.payload)))
+  if (!hookToken) return json({ error: "hook_not_configured" }, 503);
+  if (!(await postArcforgeHook(ARCFORGE_HOOK_URL, hookToken, decision.payload)))
     return json({ error: "hook_rejected" }, 502);
   return json({ ok: true, accepted: true, route: "hook" }, 202);
 }

@@ -117,25 +117,9 @@ export async function arcforgeActivityRoute(
   };
 }
 
-export function validArcforgeHookUrl(value: unknown): string | null {
-  try {
-    const url = new URL(String(value || ""));
-    if (
-      url.protocol !== "https:" ||
-      url.hostname !== "team.arcforge.au" ||
-      (url.port && url.port !== "443") ||
-      url.username ||
-      url.password ||
-      url.pathname !== "/hooks/agent" ||
-      url.search ||
-      url.hash
-    )
-      return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
+// Fixed destination: a configurable URL would also spend one of the Worker's
+// 64 Free-plan variables, and only this hook is ever valid.
+export const ARCFORGE_HOOK_URL = "https://team.arcforge.au/hooks/agent";
 
 // GitHub abandons a delivery after ten seconds, so this asks OpenClaw only to
 // admit the run. Failures surface in the webhook's recent deliveries.

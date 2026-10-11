@@ -5,7 +5,6 @@ import {
   arcforgeActivityRepositories,
   arcforgeActivityRoute,
   postArcforgeHook,
-  validArcforgeHookUrl,
 } from "../dashboard/arcforge-activity.ts";
 import worker from "../dashboard/worker.ts";
 
@@ -124,19 +123,8 @@ test("unenrolled repos, routine comments, closed items and body-less edits are i
   }
 });
 
-test("configuration and hook destination are validated", async () => {
+test("configuration is validated and the hook refuses redirects", async () => {
   assert.throws(() => arcforgeActivityRepositories("arcforgelabs/ok,../escape"));
-  assert.equal(
-    validArcforgeHookUrl("https://team.arcforge.au/hooks/agent"),
-    "https://team.arcforge.au/hooks/agent",
-  );
-  for (const bad of [
-    "http://team.arcforge.au/hooks/agent",
-    "https://evil.example/hooks/agent",
-    "https://team.arcforge.au/hooks/agent?x=1",
-    "https://u:p@team.arcforge.au/hooks/agent",
-  ])
-    assert.equal(validArcforgeHookUrl(bad), null, bad);
   const seen: RequestInit[] = [];
   const ok = await postArcforgeHook(
     "https://team.arcforge.au/hooks/agent",
