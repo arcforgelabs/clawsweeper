@@ -4,18 +4,38 @@ on:
     types: [clawsweeper_item]
 permissions:
   contents: read
+  # Only to disable this workflow when the monthly minute cap is reached.
+  actions: write
+env:
+  # Hard stop: runner minutes this workflow may use per UTC month.
+  CLAWSWEEPER_MONTHLY_MINUTE_CAP: 25000
 jobs:
   review:
     if: github.repository == 'arcforgelabs/clawsweeper'
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
+      - name: Record job start
+        run: echo "JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
       # Only trusted default-branch adapter code; never check out the target PR here.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: main
           persist-credentials: false
+      - name: Check monthly minute cap
+        id: cap
+        env:
+          CLAWSWEEPER_WEBHOOK_SECRET: ${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/arcforge/gateway-review-cap.mjs check
       - name: Claim upstream lease and await gateway publication
+        if: steps.cap.outputs.capped == 'false'
         env:
           CLAWSWEEPER_WEBHOOK_SECRET: ${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}
         run: node scripts/arcforge/gateway-review-run.mjs
+      - name: Record runner minutes
+        if: always()
+        continue-on-error: true
+        env:
+          CLAWSWEEPER_WEBHOOK_SECRET: ${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}
+        run: node scripts/arcforge/gateway-review-cap.mjs record

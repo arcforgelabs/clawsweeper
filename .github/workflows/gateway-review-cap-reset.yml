@@ -1,0 +1,19 @@
+name: Gateway exact review cap reset
+# gateway-review.yml disables itself at its monthly minute cap; the Worker's
+# minute total resets with the UTC month, so enable the workflow again then.
+on:
+  schedule:
+    - cron: "10 0 1 * *"
+  workflow_dispatch:
+permissions:
+  actions: write
+jobs:
+  enable:
+    if: github.repository == 'arcforgelabs/clawsweeper'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enable Gateway exact review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable gateway-review.yml --repo "$GITHUB_REPOSITORY"
