@@ -156,4 +156,47 @@ test("signed Worker intake binds live HTTP source and forwards upstream source a
   assert.equal(stale.status, 202);
   assert.equal(((await stale.json()) as any).accepted, false);
   assert.equal(forwarded.length, 1);
+
+  // The org webhook reply must carry the queue's real outcome, not only `ok`.
+  const activityEnv = {
+    ...env,
+    ARCFORGE_ACTIVITY_WEBHOOK_SECRET: "hook-secret",
+    ARCFORGE_ACTIVITY_REPOSITORIES: "arcforgelabs/example",
+  };
+  const activity = async (head: string) => {
+    const body = JSON.stringify({
+      action: "opened",
+      repository: { full_name: "arcforgelabs/example", default_branch: "main" },
+      pull_request: { ...live, head: { sha: head } },
+    });
+    const response = await worker.fetch(
+      new Request("https://fixture.test/internal/arcforge/github-activity", {
+        method: "POST",
+        headers: {
+          "x-github-event": "pull_request",
+          "x-github-delivery": `delivery-${head.slice(0, 4)}`,
+          "x-hub-signature-256":
+            "sha256=" + createHmac("sha256", "hook-secret").update(body).digest("hex"),
+        },
+        body,
+      }),
+      activityEnv,
+    );
+    assert.equal(response.status, 202);
+    return response.json();
+  };
+  assert.deepEqual(await activity(live.head.sha), {
+    ok: true,
+    accepted: true,
+    route: "queue",
+    stage: "source_authority_reserved",
+    source_authority_seq: 1,
+  });
+  assert.deepEqual(await activity("c".repeat(40)), {
+    ok: true,
+    accepted: false,
+    route: "queue",
+    reason: "source_not_current_or_open",
+  });
+  assert.equal(forwarded.length, 2);
 });

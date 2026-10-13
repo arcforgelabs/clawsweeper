@@ -117,6 +117,30 @@ export async function arcforgeActivityRoute(
   };
 }
 
+// Report what the queue actually did. `ok` alone also covers a stale source,
+// a duplicate delivery and a reservation that still waits for verification.
+export function arcforgeQueueIntakeReply(status: number, receipt: Json) {
+  const reason =
+    receipt.ok === true
+      ? receipt.deduped === true
+        ? "duplicate_delivery"
+        : receipt.accepted === false || receipt.shed === true
+          ? String(receipt.reason || "not_accepted")
+          : null
+      : String(receipt.error || status);
+  const sourceAuthoritySeq = Number(receipt.source_authority_seq);
+  return {
+    ok: true,
+    accepted: reason === null,
+    route: "queue",
+    ...(reason === null ? {} : { reason }),
+    ...(Number.isSafeInteger(sourceAuthoritySeq) && sourceAuthoritySeq > 0
+      ? { stage: "source_authority_reserved", source_authority_seq: sourceAuthoritySeq }
+      : {}),
+    ...(receipt.branch_authority_pending === true ? { stage: "branch_authority_pending" } : {}),
+  };
+}
+
 // Fixed destination: a configurable URL would also spend one of the Worker's
 // 64 Free-plan variables, and only this hook is ever valid.
 export const ARCFORGE_HOOK_URL = "https://team.arcforge.au/hooks/agent";
