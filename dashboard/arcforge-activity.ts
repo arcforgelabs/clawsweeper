@@ -4,6 +4,10 @@
 // retired `review-event-adapter` in arcforgelabs/.github clawsweeper-activity.yml:
 // pull requests enter the durable exact-review queue; issues and maintainer
 // review commands on issues go to the OpenClaw hook as an advisory request.
+// Only maintainer-authored issues and pull requests start a review on their
+// own: a review costs money, and enrolled public repositories accept issues
+// and fork pull requests from anyone. A maintainer can still request one
+// with a review command.
 
 const ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 const REVIEW_COMMAND = /^@clawsweeper(?:\[bot\])?\s+(?:review|re-review)\s*$/i;
@@ -47,12 +51,16 @@ export async function arcforgeActivityRoute(
   let kind: "issue" | "pull request";
   if (eventName === "issues" && (action === "opened" || action === "reopened")) {
     item = event.issue ?? {};
+    if (!ALLOWED_ASSOCIATIONS.has(String(item.author_association || "")))
+      return ignore("issue author not a maintainer");
     kind = "issue";
   } else if (
     eventName === "pull_request" &&
     ["opened", "reopened", "ready_for_review", "synchronize", "edited"].includes(action)
   ) {
     item = event.pull_request ?? {};
+    if (!ALLOWED_ASSOCIATIONS.has(String(item.author_association || "")))
+      return ignore("pull request author not a maintainer");
     if (typeof item.draft !== "boolean") return ignore("pull request draft state missing");
     if (action === "edited" && !("body" in (event.changes ?? {})))
       return ignore("pull request edit without body change");

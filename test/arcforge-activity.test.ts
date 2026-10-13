@@ -13,6 +13,7 @@ const repository = { full_name: "arcforgelabs/example", default_branch: "main" }
 const pr = {
   number: 7,
   state: "open",
+  author_association: "MEMBER",
   draft: false,
   updated_at: "2026-10-11T00:00:00Z",
   head: { sha: "a".repeat(40) },
@@ -113,7 +114,14 @@ test("unenrolled repos, routine comments, closed items and body-less edits are i
         issue: { number: 1, state: "open" },
       },
     ],
-    ["issues", { action: "opened", repository, issue: { number: 1, state: "closed" } }],
+    [
+      "issues",
+      {
+        action: "opened",
+        repository,
+        issue: { number: 1, state: "closed", author_association: "MEMBER" },
+      },
+    ],
     ["issues", { action: "labeled", repository, issue: { number: 1, state: "open" } }],
     ["pull_request", { action: "edited", repository, pull_request: pr, changes: { title: {} } }],
     ["pull_request", { action: "opened", repository, pull_request: { ...pr, draft: undefined } }],
@@ -121,6 +129,79 @@ test("unenrolled repos, routine comments, closed items and body-less edits are i
   for (const [name, event] of cases) {
     assert.equal((await arcforgeActivityRoute(name, event, "d", enrolled)).route, "ignore", name);
   }
+});
+
+test("only maintainer-authored issues and pull requests start a review on their own", async () => {
+  for (const association of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", ""]) {
+    for (const action of ["opened", "reopened", "synchronize", "ready_for_review"]) {
+      const routed = await arcforgeActivityRoute(
+        "pull_request",
+        { action, repository, pull_request: { ...pr, author_association: association } },
+        "d",
+        enrolled,
+      );
+      assert.deepEqual(routed, {
+        route: "ignore",
+        reason: "pull request author not a maintainer",
+      });
+    }
+    const edited = await arcforgeActivityRoute(
+      "pull_request",
+      {
+        action: "edited",
+        repository,
+        changes: { body: {} },
+        pull_request: { ...pr, author_association: association },
+      },
+      "d",
+      enrolled,
+    );
+    assert.equal(edited.route, "ignore");
+    const issue = await arcforgeActivityRoute(
+      "issues",
+      {
+        action: "opened",
+        repository,
+        issue: { number: 3, state: "open", author_association: association },
+      },
+      "d",
+      enrolled,
+    );
+    assert.deepEqual(issue, { route: "ignore", reason: "issue author not a maintainer" });
+  }
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    const routed = await arcforgeActivityRoute(
+      "pull_request",
+      { action: "opened", repository, pull_request: { ...pr, author_association: association } },
+      "d",
+      enrolled,
+    );
+    assert.equal(routed.route, "queue", association);
+    const issue = await arcforgeActivityRoute(
+      "issues",
+      {
+        action: "opened",
+        repository,
+        issue: { number: 3, state: "open", author_association: association },
+      },
+      "d",
+      enrolled,
+    );
+    assert.equal(issue.route, "hook", association);
+  }
+  // A maintainer can still ask for a review of an outside contribution.
+  const command = await arcforgeActivityRoute(
+    "issue_comment",
+    {
+      action: "created",
+      repository,
+      comment: { author_association: "OWNER", body: "@clawsweeper review" },
+      issue: { number: 7, state: "open", author_association: "NONE", pull_request: {} },
+    },
+    "d",
+    enrolled,
+  );
+  assert.equal(command.route, "queue");
 });
 
 test("configuration is validated and the hook refuses redirects", async () => {

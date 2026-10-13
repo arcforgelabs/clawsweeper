@@ -31,7 +31,11 @@ enter the durable queue; opened or reopened issues and review commands on issues
 go to the OpenClaw hook at `team.arcforge.au/hooks/agent`
 (`CLAWSWEEPER_OPENCLAW_HOOK_TOKEN`) as an admission-only request, because GitHub
 abandons a delivery after ten seconds. Only repositories in
-`ARCFORGE_ACTIVITY_REPOSITORIES` are routed. Failed deliveries appear in the
+`ARCFORGE_ACTIVITY_REPOSITORIES` are routed. Issues and pull requests start a
+review on their own only when their author is an `OWNER`, `MEMBER` or
+`COLLABORATOR`, because a review costs money and the enrolled public
+repositories accept contributions from anyone. For any other author, including
+Dependabot, a maintainer comments `@clawsweeper review`. Failed deliveries appear in the
 webhook's recent deliveries and can be redelivered there. No Actions minutes are
 spent on intake.
 
