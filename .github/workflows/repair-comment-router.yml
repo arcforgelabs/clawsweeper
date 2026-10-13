@@ -79,6 +79,8 @@ concurrency:
 
 jobs:
   hosted-target-admission:
+    # A fork sets CLAWSWEEPER_SCHEDULES to off: the timed scans read upstream's own target.
+    if: ${{ github.event_name != 'schedule' || vars.CLAWSWEEPER_SCHEDULES != 'off' }}
     uses: ./.github/workflows/hosted-target-admission.yml
     with:
       target_repo: ${{ github.event_name == 'workflow_dispatch' && inputs.target_repo || github.event_name == 'repository_dispatch' && github.event.client_payload.target_repo || vars.CLAWSWEEPER_TARGET_REPO || 'openclaw/openclaw' }}
