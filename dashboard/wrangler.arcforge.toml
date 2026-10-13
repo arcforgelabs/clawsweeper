@@ -1,0 +1,148 @@
+# Arc Forge deployment of the stock ClawSweeper Worker: public repositories only.
+# Based on upstream dashboard/wrangler.toml. Deploy only with Samuel's go, from the
+# prod-forge-gateway egress:
+#   npx wrangler@4.131.1 deploy --config dashboard/wrangler.arcforge.toml
+# A new Worker on workers.dev only. It has no custom domain, so it does not take
+# clawsweeper.arcforge.au from the current Worker. Secrets are set with
+# `wrangler secret put`, never in this file: CLAWSWEEPER_APP_PRIVATE_KEY,
+# CLAWSWEEPER_WEBHOOK_SECRET, INGEST_TOKEN and optional EXACT_REVIEW_OPERATOR_SECRET.
+name = "clawsweeper-public"
+main = "worker.ts"
+account_id = "fdc03af65091401927c0557d895df743"
+compatibility_date = "2026-05-11"
+workers_dev = true
+
+# Workers Logs stay off until the supplier register covers them.
+[observability]
+enabled = false
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+# A new bucket, so no record from the current Worker's store carries over.
+[[r2_buckets]]
+binding = "STATE_SNAPSHOTS"
+bucket_name = "clawsweeper-public-snapshots"
+
+# Upstream's REVIEW_USAGE Analytics Engine binding is left out until the supplier
+# register covers it. Review usage submission is best-effort and answers 503.
+
+[[durable_objects.bindings]]
+name = "STATUS_STORE"
+class_name = "StatusStore"
+
+[[durable_objects.bindings]]
+name = "EXACT_REVIEW_QUEUE"
+class_name = "ExactReviewQueue"
+
+[[durable_objects.bindings]]
+name = "GITHUB_ETAG_CACHE"
+class_name = "GithubEtagCache"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["StatusStore"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ExactReviewQueue"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["GithubEtagCache"]
+
+[vars]
+CLAWSWEEPER_REPO = "arcforgelabs/clawsweeper"
+CLAWSWEEPER_TARGET_REGISTRY_URL = "https://raw.githubusercontent.com/arcforgelabs/clawsweeper/main/config/target-repositories.json"
+CLAWSWEEPER_BOT_LOGINS = "arc-forge-clawsweeper[bot]"
+CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
+CLAWSWEEPER_CRABFLEET_URL = ""
+TARGET_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/themes"
+# Explicit public-only allowlist for canonical repository + issue/PR references
+# rendered in Overview. Repositories must be verified public before addition.
+PUBLIC_BAY_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/themes"
+APPLY_TARGET_REPOS = ""
+APPLY_OPTIONAL_TARGET_REPOS = ""
+CLAWSWEEPER_ENABLE_CLAWHUB = "0"
+WORKER_BUDGET = "128"
+EXACT_REVIEW_ACTIONS_BUDGET = "194"
+WORKER_DETAIL_RUN_LIMIT = "128"
+WORKER_JOB_FETCH_CONCURRENCY = "12"
+WORKER_JOB_CACHE_TTL_SECONDS = "60"
+WORKER_HEALTH_CACHE_TTL_SECONDS = "120"
+WORKER_HEALTH_FETCH_CONCURRENCY = "20"
+AUTOMERGE_CACHE_TTL_SECONDS = "300"
+RECENT_CLOSED_CACHE_TTL_SECONDS = "300"
+CACHE_TTL_SECONDS = "60"
+INCLUDE_CI_STATUS = "1"
+EXACT_REVIEW_QUEUE_MAX_CONCURRENT = "5"
+EXACT_REVIEW_TARGET_MAX_CONCURRENT = "2"
+EXACT_REVIEW_SCHEDULED_MAX_CONCURRENT = "2"
+EXACT_REVIEW_PUBLICATION_MIN_CONCURRENT = "1"
+EXACT_REVIEW_PUBLICATION_BASE_CONCURRENT = "5"
+EXACT_REVIEW_PUBLICATION_MAX_CONCURRENT = "5"
+EXACT_REVIEW_DISPATCH_LEASE_MS = "360000"
+EXACT_REVIEW_EXECUTION_LEASE_MS = "7800000"
+EXACT_REVIEW_HEARTBEAT_GRACE_MS = "1200000"
+EXACT_REVIEW_WORKFLOW_PAUSED_RETRY_MS = "60000"
+EXACT_REVIEW_DISPATCH_DEBOUNCE_MS = "90000"
+EXACT_REVIEW_DISPATCH_DEBOUNCE_MAX_MS = "180000"
+# An item that already completed 2 full reviews in the last hour is under active
+# churn (repeated pushes/edits). Its next organic revision coalesces for 10
+# minutes from the latest event, capped at 15 minutes from the first pending
+# enqueue, so a continuously pushed PR is still reviewed. Commands, publication,
+# scheduled, repair and recovery work keep the ordinary timing.
+EXACT_REVIEW_ACTIVE_ITEM_REVIEW_THRESHOLD = "2"
+EXACT_REVIEW_ACTIVE_ITEM_WINDOW_MS = "3600000"
+EXACT_REVIEW_ACTIVE_ITEM_DEBOUNCE_MS = "600000"
+EXACT_REVIEW_ACTIVE_ITEM_DEBOUNCE_MAX_MS = "900000"
+# Bump only when a scanner, policy, or deployment change should grant unchanged
+# parked review inputs a fresh bounded retry budget.
+EXACT_REVIEW_RETRY_POLICY_EPOCH = "1"
+EXACT_REVIEW_PENDING_SOFT_LIMIT = "600"
+# Park an item after this many consecutive automatic source-drift review
+# generations without organic input or a command (a newer scheduled offer
+# releases one review but keeps the count). "0" disables the breaker.
+EXACT_REVIEW_SOURCE_DRIFT_REQUEUE_LIMIT = "3"
+# Queue health degrades with review_runaway when an item claims more than this
+# many full reviews in a trailing 24 hours.
+EXACT_REVIEW_RUNAWAY_REVIEWS_PER_DAY = "24"
+# Scheduled admission refill rate after bounded organic debits, not a total
+# execution or spend cap. The budget meters executed reviews: at ~30 GitHub
+# requests/review, a combined load near 220 executed reviews/hour would use
+# ~6,600 requests/hour: under
+# half of the 15,000-request installation bucket, leaving explicit capacity for
+# exact ingress, comment routing, apply proof, publication, planner scans, and
+# support lanes, and below the ~300 reviews/hour that previously hit org rate
+# limits. Organic work is always admitted for free and debits this budget first
+# when a claimed run starts Codex generation (once per claim generation), so
+# organic items closed, superseded, coalesced, deduped, or skipped before
+# generation cost nothing. Scheduled work debits when admitted and prepays its
+# first started generation.
+# Debt stops at minus
+# the burst; further organic debits at the floor are forgotten, so organic load
+# may exceed these estimates. A 24-item scheduled burst (8 hot, 16 normal)
+# represents roughly 720 requests. GitHub throttle feedback from review completion still
+# pauses scheduled admission.
+EXACT_REVIEW_TARGET_RATE_PER_HOUR = "60"
+EXACT_REVIEW_TARGET_BURST = "6"
+# Hot intake is capped so its 5-minute churn cannot take the remainder that
+# oldest-first normal backfill needs; normal backfill gets total minus hot.
+EXACT_REVIEW_HOT_INTAKE_RATE_PER_HOUR = "30"
+# Batch publication dispatches exact-review-batch-publish.yml, which stays disabled.
+EXACT_REVIEW_PUBLICATION_BATCHING_ENABLED = "0"
+EXACT_REVIEW_DIRECT_PUBLICATION_ENABLED = "1"
+EXACT_REVIEW_PUBLICATION_BATCH_SIZE = "8"
+EXACT_REVIEW_PUBLICATION_BATCH_MAX_CONCURRENT = "8"
+# Reserve 2 members for recent protocol-v2 tuples that still match the
+# queue's current source revision. The other 6 members keep draining FIFO.
+EXACT_REVIEW_PUBLICATION_FRESH_LANE_ENABLED = "1"
+EXACT_REVIEW_PUBLICATION_FRESH_LANE_MAX_ITEMS = "2"
+EXACT_REVIEW_PUBLICATION_FRESH_LANE_MAX_AGE_MS = "900000"
+EXACT_REVIEW_PUBLICATION_BATCH_WAIT_MS = "60000"
+# Refill the existing eight bounded publisher slots quickly; a 30s refill
+# serialized batches despite dozens of ready publication records.
+EXACT_REVIEW_PUBLICATION_BATCH_DISPATCH_COOLDOWN_MS = "5000"
+EXACT_REVIEW_PUBLICATION_BATCH_DISPATCH_RESERVATION_MS = "600000"
+REVIEW_OBSERVABILITY_REQUIRED = "0"
+REVIEW_RECOVERY_ENABLED = "0"
