@@ -24,8 +24,10 @@ crons = ["*/5 * * * *"]
 binding = "STATE_SNAPSHOTS"
 bucket_name = "clawsweeper-public-snapshots"
 
-# Upstream's REVIEW_USAGE Analytics Engine binding is left out until the supplier
-# register covers it. Review usage submission is best-effort and answers 503.
+# Review token usage and run time, as upstream records it (Analytics Engine, free plan).
+[[analytics_engine_datasets]]
+binding = "REVIEW_USAGE"
+dataset = "clawsweeper_public_review_usage"
 
 [[durable_objects.bindings]]
 name = "STATUS_STORE"
