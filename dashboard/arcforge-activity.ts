@@ -67,6 +67,15 @@ export async function arcforgeActivityRoute(
   } else {
     return ignore("unsupported event");
   }
+  // Public forks rehearse our own work before it goes upstream, so only a
+  // maintainer's issue or pull request starts a review there. A maintainer
+  // review command still admits anyone else's pull request.
+  if (
+    eventName !== "issue_comment" &&
+    event.repository?.fork === true &&
+    !ALLOWED_ASSOCIATIONS.has(String(item.author_association || ""))
+  )
+    return ignore("fork item author not a maintainer");
   const number = item.number;
   if (!Number.isInteger(number) || number < 1 || item.state !== "open")
     return ignore("item not open");
