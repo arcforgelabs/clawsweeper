@@ -145,7 +145,8 @@ concurrency:
 
 jobs:
   hosted-target-admission:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    # A fork sets CLAWSWEEPER_SCHEDULES to off: the timed runs sweep upstream's own targets.
+    if: ${{ (github.event_name == 'schedule' && vars.CLAWSWEEPER_SCHEDULES != 'off') || github.event_name == 'workflow_dispatch' }}
     uses: ./.github/workflows/hosted-target-admission.yml
     with:
       target_repo: ${{ github.event.inputs.target_repo || ((github.event.schedule == '8,23,38,53 * * * *') && 'openclaw/clawhub' || 'openclaw/openclaw') }}
