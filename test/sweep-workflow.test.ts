@@ -652,7 +652,9 @@ test("Codex source setup normalizes OpenClaw casing and stays out of the OpenCla
     runs: { steps: Array<{ id?: string; if?: string; uses?: string; run?: string }> };
   };
   const normalize = action.runs.steps.find((step) => step.id === "target");
-  const cache = action.runs.steps.find((step) => step.uses === "actions/cache/restore@v6");
+  const cache = action.runs.steps.find(
+    (step) => step.uses === "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+  );
   assert.ok(normalize);
   assert.match(cache?.if ?? "", /steps\.target\.outputs\.repository == 'openclaw\/openclaw'/u);
   assert.match(cache?.if ?? "", /env\.CLAWSWEEPER_RUNNER != 'openclaw'/u);
@@ -1263,8 +1265,11 @@ test("exact event review publishes directly with a queue-bounded canonical fallb
     (create.run ?? "").indexOf("mkdir -p .artifacts") <
       (create.run ?? "").indexOf("exact-review-bundle create"),
   );
-  assert.equal(upload.uses, "actions/upload-artifact@v7");
-  assert.equal(failureDiagnostics.uses, "actions/upload-artifact@v7");
+  assert.equal(upload.uses, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
+  assert.equal(
+    failureDiagnostics.uses,
+    "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+  );
   assert.equal(failureDiagnostics["continue-on-error"], true);
   assert.match(
     failureDiagnostics.if ?? "",
@@ -1647,12 +1652,14 @@ test("exact event review publishes directly with a queue-bounded canonical fallb
     "${{ steps.publication-context.outputs.item_number }}",
   );
   const publisherCheckout = publisher.steps.find(
-    (candidate) => candidate.uses === "actions/checkout@v7" && candidate.if,
+    (candidate) =>
+      candidate.uses === "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" &&
+      candidate.if,
   );
   assert.ok(publisherCheckout);
   assert.equal(publisherCheckout.with?.ref, "main");
   assert.match(publisherCheckout.if ?? "", /direct_lifecycle_recovery != 'true'/);
-  assert.equal(download.uses, "actions/download-artifact@v8");
+  assert.equal(download.uses, "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333");
   assert.match(download.if ?? "", /direct_lifecycle_recovery != 'true'/);
   assert.equal(download["continue-on-error"], true);
   assert.equal(download.with?.name, "${{ steps.publication-context.outputs.artifact_name }}");
@@ -5092,13 +5099,13 @@ test("exact-review target checkout restores the hourly cache and saves it before
     pruneIndex,
   ].map((index) => steps[index]!);
   for (const gated of [key, restore]) assert.equal(gated.if, checkout.if);
-  assert.equal(restore.uses, "actions/cache/restore@v6");
+  assert.equal(restore.uses, "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
   assert.equal(restore.with?.key, "${{ steps.target-git-cache-key.outputs.key }}");
   assert.equal(
     restore.with?.["restore-keys"],
     "${{ steps.target-git-cache-key.outputs.day_prefix }}",
   );
-  assert.equal(save.uses, "actions/cache/save@v6");
+  assert.equal(save.uses, "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
   assert.equal(save.with?.key, restore.with?.key);
   assert.equal(save.with?.path, restore.with?.path);
   assert.equal(save["continue-on-error"], true);

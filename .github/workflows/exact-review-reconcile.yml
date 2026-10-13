@@ -62,7 +62,7 @@ jobs:
       actions: read
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: ${{ always() }}
         # workflow_run may expose secrets, so execute observer code only from the trusted default branch.
         with:
@@ -101,7 +101,7 @@ jobs:
           curl -fsSL --retry 3 --retry-all-errors --retry-connrefused "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/src/repair/exact-review-queue-reconcile.ts" -o "$RUNNER_TEMP/exact-review-queue-reconcile.mts"
           node "$RUNNER_TEMP/exact-review-queue-reconcile.mts" sweep
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Create state token
         id: state-token

@@ -74,7 +74,7 @@ runs:
   steps:
     - name: Check out operational state
       if: ${{ inputs.hydrate-git-state == 'true' && inputs.sparse-checkout == '' }}
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         repository: openclaw/clawsweeper-state
         ref: state
@@ -93,7 +93,7 @@ runs:
 
     - name: Check out selected operational state
       if: ${{ inputs.hydrate-git-state == 'true' && inputs.sparse-checkout != '' }}
-      uses: actions/checkout@v7
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       with:
         repository: openclaw/clawsweeper-state
         ref: state
@@ -133,14 +133,14 @@ runs:
 
     - name: Restore canonical record snapshot
       if: ${{ inputs.hydrate-records == 'true' && inputs.records-item-number == '' && steps.records-snapshot.outputs.available == 'true' }}
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ inputs.worktree-path }}/.artifacts/worker-records-cache
         key: clawsweeper-records-${{ runner.os }}-${{ steps.records-snapshot.outputs.cache-key }}
 
     - name: Restore canonical blob cache
       if: ${{ inputs.hydrate-state-blobs == 'true' }}
-      uses: actions/cache@v6
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ inputs.worktree-path }}/.artifacts/worker-blobs-cache
         key: clawsweeper-blobs-${{ runner.os }}-${{ github.run_id }}

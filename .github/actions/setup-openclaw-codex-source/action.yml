@@ -34,7 +34,7 @@ runs:
     - name: Restore Codex source object cache
       id: cache
       if: ${{ steps.target.outputs.repository == 'openclaw/openclaw' && env.CLAWSWEEPER_RUNNER != 'openclaw' && steps.cache-key.outputs.key != '' }}
-      uses: actions/cache/restore@v6
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ inputs.target-dir }}-codex-cache.git
         key: ${{ steps.cache-key.outputs.key }}
@@ -63,7 +63,7 @@ runs:
     - name: Save Codex source object cache
       if: ${{ steps.cache-key.outputs.key != '' && steps.cache.outputs.cache-hit != 'true' && steps.materialize.outputs.ready == 'true' }}
       continue-on-error: true
-      uses: actions/cache/save@v6
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
       with:
         path: ${{ inputs.target-dir }}-codex-cache.git
         key: ${{ steps.cache-key.outputs.key }}

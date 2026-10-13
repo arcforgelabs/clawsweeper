@@ -53,7 +53,7 @@ test("trusted-event workflows explicitly checkout the default branch", () => {
     const workflow = parse(readFileSync(path, "utf8")) as WorkflowDocument;
     const checkoutSteps = Object.values(workflow.jobs ?? {})
       .flatMap((job) => job.steps ?? [])
-      .filter((step) => step.uses === "actions/checkout@v7");
+      .filter((step) => step.uses === `actions/checkout@${checkoutV7Commit}`);
     assert.equal(checkoutSteps.length, 1, path);
     assert.equal(checkoutSteps[0]?.with?.ref, expectedRef, path);
   }
@@ -63,7 +63,9 @@ test("trusted-event state checkout remains pinned to the state repository branch
   const action = parse(readFileSync(".github/actions/setup-state/action.yml", "utf8")) as {
     runs?: { steps?: CheckoutStep[] };
   };
-  const checkout = action.runs?.steps?.find((step) => step.uses === "actions/checkout@v7");
+  const checkout = action.runs?.steps?.find(
+    (step) => step.uses === `actions/checkout@${checkoutV7Commit}`,
+  );
   assert.equal(checkout?.with?.repository, "openclaw/clawsweeper-state");
   assert.equal(checkout?.with?.ref, "state");
 });

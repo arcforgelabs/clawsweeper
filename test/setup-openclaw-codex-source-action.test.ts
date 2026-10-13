@@ -547,8 +547,12 @@ test("Codex source cache is keyed by the exact base pin and saved only after a r
   };
   const steps = action.runs.steps;
   const keyStep = steps.find((step) => step.id === "cache-key");
-  const restore = steps.find((step) => step.uses === "actions/cache/restore@v6");
-  const save = steps.find((step) => step.uses === "actions/cache/save@v6");
+  const restore = steps.find(
+    (step) => step.uses === "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+  );
+  const save = steps.find(
+    (step) => step.uses === "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+  );
   assert.ok(keyStep?.run && restore && save);
   assert.equal(restore.with?.key, "${{ steps.cache-key.outputs.key }}");
   assert.equal(restore.with?.["restore-keys"], undefined);
