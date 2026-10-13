@@ -69,6 +69,7 @@ const EXACT_REVIEW_QUEUE_ENDPOINTS = new Map<string, string>([
   ["/review-run-telemetry", "review_run_telemetry"],
   ["/source-authority", "source_authority"],
   ["/source-authority/complete", "source_authority_complete"],
+  ["/source-authority/list", "source_authority_list"],
   ["/state-writer-progress", "state_writer_progress"],
   ["/state-writer/acquire", "state_writer_acquire"],
   ["/state-writer/heartbeat", "state_writer_heartbeat"],

@@ -113,6 +113,9 @@ export type ExactReviewSourceAuthorityReservation = {
   installationId: number;
   sourceAuthoritySeq: number;
   reviewAcknowledgementPending?: boolean;
+  // Set when the front Worker had already confirmed target eligibility. A
+  // contrary queue verdict soon after is treated as deployment skew.
+  eligibilityVouchedAt?: number;
   attempts: number;
   nextAttemptAt: number;
 };
@@ -272,6 +275,7 @@ export function exactReviewSourceAuthorityReservationFrom(
   const installationId = Number(reservation.installationId);
   const sourceAuthoritySeq = Number(reservation.sourceAuthoritySeq);
   const reviewAcknowledgementPending = reservation.reviewAcknowledgementPending === true;
+  const eligibilityVouchedAt = Number(reservation.eligibilityVouchedAt);
   const attempts = Number(reservation.attempts);
   const nextAttemptAt = Number(reservation.nextAttemptAt);
   if (
@@ -288,6 +292,8 @@ export function exactReviewSourceAuthorityReservationFrom(
     decision.sourceAuthoritySeq !== sourceAuthoritySeq ||
     (reservation.reviewAcknowledgementPending !== undefined &&
       typeof reservation.reviewAcknowledgementPending !== "boolean") ||
+    (reservation.eligibilityVouchedAt !== undefined &&
+      (!Number.isSafeInteger(eligibilityVouchedAt) || eligibilityVouchedAt <= 0)) ||
     !Number.isInteger(attempts) ||
     attempts < 0 ||
     attempts > EXACT_REVIEW_SOURCE_AUTHORITY_RETRY_LIMIT ||
@@ -303,6 +309,7 @@ export function exactReviewSourceAuthorityReservationFrom(
     installationId,
     sourceAuthoritySeq,
     ...(reviewAcknowledgementPending ? { reviewAcknowledgementPending: true } : {}),
+    ...(reservation.eligibilityVouchedAt !== undefined ? { eligibilityVouchedAt } : {}),
     attempts,
     nextAttemptAt,
   };

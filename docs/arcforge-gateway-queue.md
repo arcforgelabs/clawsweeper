@@ -35,6 +35,24 @@ abandons a delivery after ten seconds. Only repositories in
 webhook's recent deliveries and can be redelivered there. No Actions minutes are
 spent on intake.
 
+The delivery reply states what the queue did. `accepted` is `false` with a
+`reason` for a stale or closed source (`source_not_current_or_open`), a
+duplicate delivery (`duplicate_delivery`) or a queue rejection. A pull request
+in private gateway mode first becomes a source-authority reservation, reported
+as `stage: "source_authority_reserved"` with its `source_authority_seq`. The
+queue alarm then rechecks the target and the live head before it creates the
+job. The signed operator route `/internal/exact-review/source-authority/list`
+lists waiting reservations and the last 50 dropped ones with a `cause`
+(`target_not_admitted`, `head_changed` or `verifier_mismatch`). A dropped
+delivery is recorded as handled, so a GitHub redelivery does not retry it; use
+`@clawsweeper re-review` instead.
+
+Enrol a repository in both `EXACT_REVIEW_ALLOWED_REPOSITORIES` and
+`ARCFORGE_ACTIVITY_REPOSITORIES`. Cloudflare moves the front Worker and the
+queue Durable Object to a new version at different moments. For 15 minutes
+after the front Worker confirmed eligibility, the queue retries a reservation
+whose target its own settings do not yet admit, instead of dropping it.
+
 This adapter retains the upstream intake, supersession, retry and dead-letter
 machinery. The gateway execution ownership records live in the same queue
 Durable Object and are bounded by active upstream claims. A 120-second execution

@@ -796,6 +796,18 @@ type OperationalCursor = {
 };
 const EXACT_REVIEW_SOURCE_AUTHORITY_RETRY_BASE_MS = 15_000;
 const EXACT_REVIEW_SOURCE_AUTHORITY_RETRY_MAX_MS = 15 * 60_000;
+// Cloudflare rolls a new Worker version out to the front Worker and to this
+// Durable Object separately, typically within seconds to minutes. When the
+// front Worker vouched for target eligibility, a contrary verdict inside this
+// window is treated as deployment skew and retried instead of dropped.
+const EXACT_REVIEW_SOURCE_AUTHORITY_SKEW_GRACE_MS = 15 * 60_000;
+const EXACT_REVIEW_SOURCE_AUTHORITY_SKEW_RETRY_MS = 60_000;
+const EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_KEY = "exact-review-source-authority-drops:v1";
+const EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_LIMIT = 50;
+type ExactReviewSourceAuthorityDropCause =
+  | "target_not_admitted"
+  | "head_changed"
+  | "verifier_mismatch";
 const EXACT_REVIEW_QUEUE_META_TABLE = "exact_review_queue_meta";
 const EXACT_REVIEW_QUEUE_ITEM_TABLE = "exact_review_queue_items";
 const EXACT_REVIEW_QUEUE_DELIVERY_TABLE = "exact_review_queue_deliveries";
@@ -1570,13 +1582,30 @@ export class ExactReviewQueue {
       ) {
         return json({ error: "invalid_source_authority_reservation" }, 400);
       }
+      const eligibilityPrepared = this.hasPreparedHostedTargetEligibility(
+        request,
+        decision.targetRepo,
+      );
       const admission = await this.hostedTargetAdmission(
         decision.targetRepo,
         hostedTargetMetadataToken,
-        this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
+        eligibilityPrepared,
         true,
       );
-      if (!hostedTargetIsAdmitted(admission)) {
+      // In the private gateway, a vouched target that this object still
+      // refuses may only mean its settings predate the front Worker's (for
+      // example a newly enrolled private repository). Reserve it; the alarm
+      // repeats admission before any job exists and drops the reservation
+      // after the skew window. The public deployment never stores a target
+      // that fails visibility admission.
+      if (
+        !hostedTargetIsAdmitted(admission) &&
+        !(
+          this.env.EXACT_REVIEW_PRIVATE_GATEWAY === "1" &&
+          eligibilityPrepared &&
+          admission.outcome === "terminal"
+        )
+      ) {
         return hostedTargetProbeResponse(admission);
       }
       const reservationKey = exactReviewSourceAuthorityReservationKey(deliveryId);
@@ -1620,6 +1649,7 @@ export class ExactReviewQueue {
             installationId,
             sourceAuthoritySeq: next,
             ...(reviewAcknowledgementPending ? { reviewAcknowledgementPending: true } : {}),
+            ...(eligibilityPrepared ? { eligibilityVouchedAt: now } : {}),
             attempts: 0,
             nextAttemptAt: reviewAcknowledgementPending ? now + 5 * 60_000 : now,
           };
@@ -1663,6 +1693,7 @@ export class ExactReviewQueue {
             deliveryId,
             Date.now(),
           );
+          this.recordSourceAuthorityDropSync(reservation, "verifier_mismatch", Date.now());
         }
         this.storage.kv.delete(reservationKey);
         return "completed" as const;
@@ -3628,6 +3659,10 @@ export class ExactReviewQueue {
 
     if (request.method === "POST" && url.pathname === "/dead-letters/resolve") {
       return this.resolveDeadLetters(await request.json().catch(() => null));
+    }
+
+    if (request.method === "POST" && url.pathname === "/source-authority/list") {
+      return this.listSourceAuthorityReservations();
     }
 
     if (request.method === "POST" && url.pathname === "/parked-reviews/list") {
@@ -13896,7 +13931,22 @@ export class ExactReviewQueue {
       );
       if (!current || stableJson(current) !== stableJson(reservation)) continue;
       if (admission.outcome === "terminal") {
-        this.completeSourceAuthorityReservationSync(current, "mismatch");
+        if (
+          current.eligibilityVouchedAt !== undefined &&
+          observedAt - current.eligibilityVouchedAt < EXACT_REVIEW_SOURCE_AUTHORITY_SKEW_GRACE_MS
+        ) {
+          console.warn("exact-review source authority admission deferred for deployment skew", {
+            event: "source_authority_admission_skew_deferred",
+          });
+          this.deferSourceAuthorityReservationSync(
+            current,
+            observedAt,
+            observedAt + EXACT_REVIEW_SOURCE_AUTHORITY_SKEW_RETRY_MS,
+            false,
+          );
+          continue;
+        }
+        this.completeSourceAuthorityReservationSync(current, "mismatch", "target_not_admitted");
         continue;
       }
       if (admission.outcome === "retryable") {
@@ -13942,7 +13992,7 @@ export class ExactReviewQueue {
         this.recordAuthorityGithubOutcomeSync(current.attempts > 0, "success", Date.now());
         const reservedHeadSha = String(current.decision.sourceHeadSha || "").toLowerCase();
         if (liveHeadSha !== reservedHeadSha) {
-          this.completeSourceAuthorityReservationSync(current, "mismatch");
+          this.completeSourceAuthorityReservationSync(current, "mismatch", "head_changed");
           continue;
         }
         const verified = exactReviewSourceAuthorityReservationFrom(
@@ -14126,6 +14176,7 @@ export class ExactReviewQueue {
   private completeSourceAuthorityReservationSync(
     expected: ExactReviewSourceAuthorityReservation,
     disposition: "enqueued" | "mismatch",
+    cause?: ExactReviewSourceAuthorityDropCause,
   ) {
     this.storage.transactionSync(() => {
       const key = exactReviewSourceAuthorityReservationKey(expected.deliveryId);
@@ -14138,9 +14189,66 @@ export class ExactReviewQueue {
             expected.deliveryId,
             Date.now(),
           );
+          if (cause) this.recordSourceAuthorityDropSync(current, cause, Date.now());
         }
         this.storage.kv.delete(key);
       }
+    });
+  }
+
+  // A dropped reservation is otherwise invisible: its delivery is recorded as
+  // handled, so a GitHub redelivery is deduplicated too. Keep a short bounded
+  // trail for the operator listing.
+  private recordSourceAuthorityDropSync(
+    reservation: ExactReviewSourceAuthorityReservation,
+    cause: ExactReviewSourceAuthorityDropCause,
+    now: number,
+  ) {
+    const stored = this.storage.kv.get(EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_KEY);
+    const drops = Array.isArray(stored) ? stored : [];
+    drops.push({
+      delivery_id: reservation.deliveryId,
+      source_authority_seq: reservation.sourceAuthoritySeq,
+      target_repo: reservation.decision.targetRepo,
+      item_number: reservation.decision.itemNumber,
+      source_action: reservation.decision.sourceAction,
+      source_head_sha: reservation.decision.sourceHeadSha ?? null,
+      cause,
+      dropped_at: new Date(now).toISOString(),
+    });
+    this.storage.kv.put(
+      EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_KEY,
+      drops.slice(-EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_LIMIT),
+    );
+    console.warn("exact-review source authority reservation dropped", {
+      event: "source_authority_dropped",
+      category: cause,
+    });
+  }
+
+  private async listSourceAuthorityReservations() {
+    const reservations = (await this.sourceAuthorityReservations())
+      .sort((left, right) => left.sourceAuthoritySeq - right.sourceAuthoritySeq)
+      .map((reservation) => ({
+        delivery_id: reservation.deliveryId,
+        source_authority_seq: reservation.sourceAuthoritySeq,
+        target_repo: reservation.decision.targetRepo,
+        item_number: reservation.decision.itemNumber,
+        source_action: reservation.decision.sourceAction,
+        source_head_sha: reservation.decision.sourceHeadSha ?? null,
+        attempts: reservation.attempts,
+        next_attempt_at: new Date(reservation.nextAttemptAt).toISOString(),
+        review_acknowledgement_pending: reservation.reviewAcknowledgementPending === true,
+        eligibility_vouched_at:
+          reservation.eligibilityVouchedAt === undefined
+            ? null
+            : new Date(reservation.eligibilityVouchedAt).toISOString(),
+      }));
+    const stored = this.storage.kv.get(EXACT_REVIEW_SOURCE_AUTHORITY_DROPS_KEY);
+    return json({
+      ok: true,
+      reservations,
+      recent_drops: Array.isArray(stored) ? [...stored].reverse() : [],
     });
   }
 

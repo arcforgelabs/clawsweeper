@@ -46,6 +46,7 @@ import { bayHtml } from "./bay-page.ts";
 import {
   arcforgeActivityRepositories,
   arcforgeActivityRoute,
+  arcforgeQueueIntakeReply,
   ARCFORGE_HOOK_URL,
   postArcforgeHook,
 } from "./arcforge-activity.ts";
@@ -1369,6 +1370,11 @@ export default {
       return authenticatedExactReviewOperatorRequest(request, env, "/dead-letters/resolve");
     if (url.pathname === "/internal/exact-review/parked-reviews/list" && request.method === "POST")
       return authenticatedExactReviewOperatorRequest(request, env, "/parked-reviews/list");
+    if (
+      url.pathname === "/internal/exact-review/source-authority/list" &&
+      request.method === "POST"
+    )
+      return authenticatedExactReviewOperatorRequest(request, env, "/source-authority/list");
     if (url.pathname === "/internal/exact-review/review-failures/list" && request.method === "POST")
       return authenticatedExactReviewOperatorRequest(request, env, "/review-failures/list");
     if (
@@ -6853,15 +6859,7 @@ async function arcforgeGithubActivity(request: Request, env: DashboardEnv) {
     );
     const receipt = objectValue(await queued.json().catch(() => null));
     if (queued.status >= 500) return json({ error: "queue_unavailable" }, 502);
-    return json(
-      {
-        ok: true,
-        accepted: receipt.ok === true,
-        route: "queue",
-        ...(receipt.ok === true ? {} : { reason: String(receipt.error || queued.status) }),
-      },
-      202,
-    );
+    return json(arcforgeQueueIntakeReply(queued.status, receipt), 202);
   }
   const hookToken = stringEnv(env.CLAWSWEEPER_OPENCLAW_HOOK_TOKEN);
   if (!hookToken) return json({ error: "hook_not_configured" }, 503);
