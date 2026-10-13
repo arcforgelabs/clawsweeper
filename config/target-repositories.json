@@ -78,6 +78,50 @@
         "pull_request": []
       },
       "package_manager": "npm"
+    },
+    {
+      "target_repo": "arcforgelabs/agent-marketplace",
+      "display_name": "Arc Forge Agent Marketplace",
+      "checkout_dir": "agent-marketplace",
+      "prompt_note": "Use the Arc Forge Agent Marketplace source tree and current default branch. It holds agent plugins, tools and skills maintained by Arc Forge Labs. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
+    },
+    {
+      "target_repo": "arcforgelabs/dictate",
+      "display_name": "Dictate",
+      "checkout_dir": "dictate",
+      "prompt_note": "Use the Dictate source tree and current default branch. It is a local-only desktop dictation app for Linux and Windows with on-device speech-to-text; Python is the main runtime and npm packages the installer. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
+    },
+    {
+      "target_repo": "arcforgelabs/field",
+      "display_name": "Field",
+      "checkout_dir": "field",
+      "prompt_note": "Use the Field source tree and current default branch. It is a quote builder and invoicing app with a typed API, CLI and MCP server. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
+    },
+    {
+      "target_repo": "arcforgelabs/themes",
+      "display_name": "Arc Forge Themes",
+      "checkout_dir": "themes",
+      "prompt_note": "Use the Arc Forge Themes source tree and current default branch. It is a design-system catalog of shadcn presets, tokens and registry items. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
     }
   ],
   "generic_fallbacks": [
