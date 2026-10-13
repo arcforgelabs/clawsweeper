@@ -167,7 +167,7 @@ test("signed Worker intake binds live HTTP source and forwards upstream source a
     const body = JSON.stringify({
       action: "opened",
       repository: { full_name: "arcforgelabs/example", default_branch: "main" },
-      pull_request: { ...live, head: { sha: head } },
+      pull_request: { ...live, author_association: "MEMBER", head: { sha: head } },
     });
     const response = await worker.fetch(
       new Request("https://fixture.test/internal/arcforge/github-activity", {
