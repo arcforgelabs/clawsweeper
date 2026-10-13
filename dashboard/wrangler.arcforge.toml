@@ -54,6 +54,7 @@ new_sqlite_classes = ["GithubEtagCache"]
 [vars]
 CLAWSWEEPER_REPO = "arcforgelabs/clawsweeper"
 CLAWSWEEPER_TARGET_REGISTRY_URL = "https://raw.githubusercontent.com/arcforgelabs/clawsweeper/main/config/target-repositories.json"
+CLAWSWEEPER_STATE_REPO = "arcforgelabs/clawsweeper-state"
 CLAWSWEEPER_BOT_LOGINS = "arc-forge-clawsweeper[bot]"
 CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
 CLAWSWEEPER_CRABFLEET_URL = ""
