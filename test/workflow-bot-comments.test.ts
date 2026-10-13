@@ -24,6 +24,23 @@ test("workflow bot logins print every login ClawSweeper writes as", () => {
   assert.deepEqual(JSON.parse(workflowBotComments(["bot-logins"])), [...CLAWSWEEPER_BOT_LOGINS]);
 });
 
+test("workflow bot logins add a fork App login from the environment", () => {
+  const logins = JSON.parse(
+    execFileSync(process.execPath, ["src/workflow-bot-comments.ts", "bot-logins"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CLAWSWEEPER_APP_BOT_LOGIN: " Example-ClawSweeper[bot] ,not a login,octocat",
+      },
+    }),
+  ) as string[];
+  assert.deepEqual(logins, [
+    ...CLAWSWEEPER_BOT_LOGINS,
+    "example-clawsweeper[bot]",
+    "example-clawsweeper",
+  ]);
+});
+
 test("workflow lease lookup selects only App-authored lease comments for the item and owner", () => {
   const [bot] = CLAWSWEEPER_APP_BOT_LOGINS;
   const status = (owner: string) =>

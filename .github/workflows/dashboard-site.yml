@@ -34,7 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+      CLAWSWEEPER_APP_CLIENT_ID: ${{ vars.CLAWSWEEPER_APP_CLIENT_ID || 'Iv23liOECG0slfuhz093' }}
+      CLAWSWEEPER_APP_BOT_LOGIN: ${{ vars.CLAWSWEEPER_APP_BOT_LOGIN || '' }}
       CLOUDFLARE_ACCOUNT_ID: 91b59577e757131d68d55a471fe32aca
       PAGES_PROJECT: clawsweeper-dashboard
     steps:

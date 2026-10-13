@@ -86,6 +86,7 @@ import {
   exactReviewTerminalRuns,
   exactReviewTerminalRunsFromBatch,
   hostedTargetProbeResponse,
+  hostedTargetRegistryUrlOption,
   hostedTargetRetryableAdmission,
   normalizeHostedTargetAdmission,
   type DurableObjectNamespace,
@@ -379,7 +380,14 @@ const HEALTH_HISTORY_KEY_PREFIX = "health-history:";
 const APPLY_OBSERVABILITY_KEY_PREFIX = "apply-observability:";
 const APPLY_OBSERVABILITY_BUCKET_KEY_PREFIX = `${APPLY_OBSERVABILITY_KEY_PREFIX}day:`;
 const APPLY_OBSERVABILITY_LEGACY_LIMIT = 5_000;
-const CLAWSWEEPER_REVIEW_REPO = "openclaw/clawsweeper";
+const DEFAULT_CLAWSWEEPER_REVIEW_REPO = "openclaw/clawsweeper";
+
+// The control repository that runs sweep.yml. Forks set the CLAWSWEEPER_REPO
+// Worker variable; the upstream deployment keeps the default.
+function clawsweeperReviewRepo(env: Readonly<Record<string, unknown>> = {}): string {
+  const configured = typeof env.CLAWSWEEPER_REPO === "string" ? env.CLAWSWEEPER_REPO.trim() : "";
+  return configured || DEFAULT_CLAWSWEEPER_REVIEW_REPO;
+}
 const CLAWSWEEPER_STATE_REPO = "openclaw/clawsweeper-state";
 const CLAWSWEEPER_STATE_REF = "state";
 const CLAWSWEEPER_ALLOWED_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
@@ -3843,9 +3851,9 @@ async function githubWebhook(request, env, ctx) {
   const dispatchToken = await createGithubAppTokenFor({
     env,
     appJwt,
-    installationId: await githubAppInstallationId(appJwt, CLAWSWEEPER_REVIEW_REPO, env),
-    label: CLAWSWEEPER_REVIEW_REPO,
-    repositories: [repoName(CLAWSWEEPER_REVIEW_REPO)],
+    installationId: await githubAppInstallationId(appJwt, clawsweeperReviewRepo(env), env),
+    label: clawsweeperReviewRepo(env),
+    repositories: [repoName(clawsweeperReviewRepo(env))],
     permissions: { contents: "write" },
   });
 
@@ -3913,6 +3921,7 @@ async function workerHostedTargetEligibility(
       )
     : undefined;
   return resolveHostedTargetEligibility(targetRepo, fetch, {
+    ...hostedTargetRegistryUrlOption(env),
     ...(configuredRepositories ? { configuredRepositories } : {}),
     ...(typeof env.hostedTargetPredicate === "function"
       ? {
@@ -6410,7 +6419,7 @@ async function dispatchClawsweeperComment({
   await githubTokenJson({
     env,
     token,
-    path: `/repos/${CLAWSWEEPER_REVIEW_REPO}/dispatches`,
+    path: `/repos/${clawsweeperReviewRepo(env)}/dispatches`,
     method: "POST",
     body: {
       event_type: "clawsweeper_comment",

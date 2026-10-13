@@ -7,6 +7,18 @@ const DEFAULT_HOSTED_TARGET_REGISTRY_URL =
   "https://raw.githubusercontent.com/openclaw/clawsweeper/main/config/target-repositories.json";
 export const HOSTED_TARGET_ELIGIBILITY_HEADER = "x-clawsweeper-hosted-target-eligible";
 
+// Forks point admission at their own registry with the
+// CLAWSWEEPER_TARGET_REGISTRY_URL Worker variable. Unset keeps the upstream URL.
+export function hostedTargetRegistryUrlOption(env: Readonly<Record<string, unknown>>): {
+  registryUrl?: string;
+} {
+  const configured =
+    typeof env.CLAWSWEEPER_TARGET_REGISTRY_URL === "string"
+      ? env.CLAWSWEEPER_TARGET_REGISTRY_URL.trim()
+      : "";
+  return configured ? { registryUrl: configured } : {};
+}
+
 export type GitHubRateLimitHint = {
   observedAt: number;
   retryAt: number;

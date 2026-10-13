@@ -16,7 +16,9 @@ environment settings are authoritative for workflow variables and secrets.
 
 | Name                              | Responsibility                                                             |
 | --------------------------------- | -------------------------------------------------------------------------- |
-| `CLAWSWEEPER_REPO`                | Repository used by ClawSweeper-specific projections.                       |
+| `CLAWSWEEPER_REPO`                | Control repository: projections, review dispatch and run reads.            |
+| `CLAWSWEEPER_TARGET_REGISTRY_URL` | Raw `target-repositories.json` URL for hosted admission (fork override).   |
+| `CLAWSWEEPER_BOT_LOGINS`          | Comma-separated App bot logins the Worker trusts as ClawSweeper.           |
 | `PUBLIC_BAY_REPOS`                | Verified-public repositories eligible for minimal Overview references.     |
 | `WORKER_DETAIL_RUN_LIMIT`         | Maximum workflow-run detail set fetched for dashboard assembly.            |
 | `WORKER_JOB_FETCH_CONCURRENCY`    | Concurrency for workflow-job detail fetching.                              |

@@ -1,0 +1,1 @@
+- Let forks set the control repository, target registry URL, GitHub App client ID, and App bot login through Worker and repository variables, with the upstream values as defaults.

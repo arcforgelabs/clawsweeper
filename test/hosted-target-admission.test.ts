@@ -8,6 +8,7 @@ import { parse } from "yaml";
 
 import { probeHostedPublicTarget } from "../dashboard/exact-review-queue.ts";
 import {
+  hostedTargetRegistryUrlOption,
   isHostedTargetEligible,
   resolveHostedTargetEligibility,
 } from "../src/hosted-target-admission.ts";
@@ -105,6 +106,39 @@ test("hosted target registry lookup stays inside queue caller deadlines", async 
     AbortSignal.timeout = originalTimeout;
   }
   assert.equal(timeoutMs, 5_000);
+});
+
+test("hosted target registry URL is a fork override that defaults to upstream", async () => {
+  assert.deepEqual(hostedTargetRegistryUrlOption({}), {});
+  assert.deepEqual(hostedTargetRegistryUrlOption({ CLAWSWEEPER_TARGET_REGISTRY_URL: "  " }), {});
+  const registryUrl =
+    "https://raw.githubusercontent.com/example/clawsweeper/main/config/target-repositories.json";
+  assert.deepEqual(
+    hostedTargetRegistryUrlOption({ CLAWSWEEPER_TARGET_REGISTRY_URL: ` ${registryUrl} ` }),
+    { registryUrl },
+  );
+  const requested: string[] = [];
+  const reader = async (input: string | URL | Request) => {
+    requested.push(String(input));
+    return Response.json({
+      schema_version: 2,
+      repositories: [{ target_repo: "example/public-repo" }],
+      generic_fallbacks: [],
+    });
+  };
+  assert.deepEqual(
+    await resolveHostedTargetEligibility("example/public-repo", reader, {
+      ...hostedTargetRegistryUrlOption({ CLAWSWEEPER_TARGET_REGISTRY_URL: registryUrl }),
+    }),
+    { outcome: "eligible" },
+  );
+  assert.deepEqual(await resolveHostedTargetEligibility("example/public-repo", reader), {
+    outcome: "eligible",
+  });
+  assert.deepEqual(requested, [
+    registryUrl,
+    "https://raw.githubusercontent.com/openclaw/clawsweeper/main/config/target-repositories.json",
+  ]);
 });
 
 test("hosted target metadata classification is authenticated, fresh, and fail-closed", async () => {

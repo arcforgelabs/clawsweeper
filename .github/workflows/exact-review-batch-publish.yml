@@ -49,7 +49,8 @@ jobs:
       # Scan the full queue window so owner filtering can still fill the 32-item lease cap.
       EXACT_REVIEW_BATCH_MAX_ITEMS: "50"
       EXACT_REVIEW_BATCH_PREPARE_CONCURRENCY: "2"
-      CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+      CLAWSWEEPER_APP_CLIENT_ID: ${{ vars.CLAWSWEEPER_APP_CLIENT_ID || 'Iv23liOECG0slfuhz093' }}
+      CLAWSWEEPER_APP_BOT_LOGIN: ${{ vars.CLAWSWEEPER_APP_BOT_LOGIN || '' }}
       CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
     steps:
       - name: Capture runner start timestamp
