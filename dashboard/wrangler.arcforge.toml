@@ -58,7 +58,7 @@ CLAWSWEEPER_CRABFLEET_URL = ""
 TARGET_REPOS = "arcforgelabs/arc-forge-deck,arcforgelabs/clawsweeper"
 # Repositories whose issue, comment and PR events the organization webhook
 # routes through /internal/arcforge/github-activity (see arcforge-activity.ts).
-ARCFORGE_ACTIVITY_REPOSITORIES = "arcforgelabs/website,arcforgelabs/infrastructure,arcforgelabs/dictate,arcforgelabs/arc-forge-deck,arcforgelabs/arc-forge-runtime,arcforgelabs/tools,arcforgelabs/openclaw-deploy,arcforgelabs/arc-forge-deck-app,arcforgelabs/openclaw-enterprise,arcforgelabs/openclaw,arcforgelabs/field"
+ARCFORGE_ACTIVITY_REPOSITORIES = "arcforgelabs/website,arcforgelabs/infrastructure,arcforgelabs/dictate,arcforgelabs/arc-forge-deck,arcforgelabs/arc-forge-runtime,arcforgelabs/tools,arcforgelabs/openclaw-deploy,arcforgelabs/arc-forge-deck-app,arcforgelabs/openclaw-enterprise,arcforgelabs/openclaw,arcforgelabs/clawsweeper,arcforgelabs/field"
 # Explicit public-only allowlist for canonical repository + issue/PR references
 # rendered in OpenClaw Bay. Repositories must be verified public before addition.
 PUBLIC_BAY_REPOS = "arcforgelabs/clawsweeper"
