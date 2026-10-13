@@ -123,6 +123,58 @@ test("unenrolled repos, routine comments, closed items and body-less edits are i
   }
 });
 
+test("forks review only maintainer-authored items unless a maintainer asks", async () => {
+  const fork = { ...repository, fork: true };
+  const route = (name: string, event: Record<string, unknown>) =>
+    arcforgeActivityRoute(name, { repository: fork, ...event }, "d", enrolled);
+  const outsiderPr = { ...pr, author_association: "NONE" };
+  const ignored: [string, Record<string, unknown>][] = [
+    ["pull_request", { action: "opened", pull_request: outsiderPr }],
+    [
+      "pull_request",
+      { action: "synchronize", pull_request: { ...pr, author_association: "CONTRIBUTOR" } },
+    ],
+    ["pull_request", { action: "opened", pull_request: pr }],
+    [
+      "issues",
+      { action: "opened", issue: { number: 2, state: "open", author_association: "NONE" } },
+    ],
+  ];
+  for (const [name, event] of ignored) {
+    const routed = await route(name, event);
+    assert.deepEqual(
+      routed,
+      { route: "ignore", reason: "fork item author not a maintainer" },
+      name,
+    );
+  }
+  for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+    const routed = await route("pull_request", {
+      action: "opened",
+      pull_request: { ...pr, author_association: association },
+    });
+    assert.equal(routed.route, "queue", association);
+  }
+  const memberIssue = await route("issues", {
+    action: "opened",
+    issue: { number: 2, state: "open", author_association: "MEMBER" },
+  });
+  assert.equal(memberIssue.route, "hook");
+  const maintainerAsks = await route("issue_comment", {
+    action: "created",
+    comment: { author_association: "OWNER", body: "@clawsweeper review" },
+    issue: { number: 7, state: "open", pull_request: {}, author_association: "NONE" },
+  });
+  assert.equal(maintainerAsks.route, "queue");
+  const notFork = await arcforgeActivityRoute(
+    "pull_request",
+    { action: "opened", repository: { ...repository, fork: false }, pull_request: outsiderPr },
+    "d",
+    enrolled,
+  );
+  assert.equal(notFork.route, "queue");
+});
+
 test("configuration is validated and the hook refuses redirects", async () => {
   assert.throws(() => arcforgeActivityRepositories("arcforgelabs/ok,../escape"));
   const seen: RequestInit[] = [];
