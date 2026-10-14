@@ -154,6 +154,18 @@ export function arcforgeQueueIntakeReply(status: number, receipt: Json) {
 // 64 Free-plan variables, and only this hook is ever valid.
 export const ARCFORGE_HOOK_URL = "https://team.arcforge.au/hooks/agent";
 
+// Cloudflare Access guards the hook path with Service Auth. One secret holds the
+// service token as "<client id>:<client secret>" so it spends one Free-plan
+// variable, not two. Unset or malformed means no Access headers are sent.
+export function arcforgeHookAccessHeaders(serviceToken: string | null): Record<string, string> {
+  const separator = serviceToken?.indexOf(":") ?? -1;
+  if (!serviceToken || separator <= 0 || separator === serviceToken.length - 1) return {};
+  return {
+    "cf-access-client-id": serviceToken.slice(0, separator),
+    "cf-access-client-secret": serviceToken.slice(separator + 1),
+  };
+}
+
 // GitHub abandons a delivery after ten seconds, so this asks OpenClaw only to
 // admit the run. Failures surface in the webhook's recent deliveries.
 export async function postArcforgeHook(
@@ -161,12 +173,14 @@ export async function postArcforgeHook(
   token: string,
   payload: Json,
   fetchImpl: typeof fetch = fetch,
+  accessHeaders: Record<string, string> = {},
 ): Promise<boolean> {
   try {
     const response = await fetchImpl(url, {
       method: "POST",
       redirect: "manual",
       headers: {
+        ...accessHeaders,
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
         "user-agent": "ArcForge-ClawSweeper/1.0",

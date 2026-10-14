@@ -48,6 +48,7 @@ import {
   arcforgeActivityRoute,
   arcforgeQueueIntakeReply,
   ARCFORGE_HOOK_URL,
+  arcforgeHookAccessHeaders,
   postArcforgeHook,
 } from "./arcforge-activity.ts";
 import {
@@ -6863,7 +6864,12 @@ async function arcforgeGithubActivity(request: Request, env: DashboardEnv) {
   }
   const hookToken = stringEnv(env.CLAWSWEEPER_OPENCLAW_HOOK_TOKEN);
   if (!hookToken) return json({ error: "hook_not_configured" }, 503);
-  if (!(await postArcforgeHook(ARCFORGE_HOOK_URL, hookToken, decision.payload)))
+  const accessHeaders = arcforgeHookAccessHeaders(
+    stringEnv(env.ARCFORGE_HOOK_ACCESS_SERVICE_TOKEN),
+  );
+  if (
+    !(await postArcforgeHook(ARCFORGE_HOOK_URL, hookToken, decision.payload, fetch, accessHeaders))
+  )
     return json({ error: "hook_rejected" }, 502);
   return json({ ok: true, accepted: true, route: "hook" }, 202);
 }

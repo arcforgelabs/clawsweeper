@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   arcforgeActivityRepositories,
   arcforgeActivityRoute,
+  arcforgeHookAccessHeaders,
   postArcforgeHook,
 } from "../dashboard/arcforge-activity.ts";
 import worker from "../dashboard/worker.ts";
@@ -196,6 +197,41 @@ test("configuration is validated and the hook refuses redirects", async () => {
     (async () => new Response("{}", { status: 302 })) as typeof fetch,
   );
   assert.equal(rejected, false);
+});
+
+test("the hook sends the Access service token only when it is configured", async () => {
+  assert.deepEqual(arcforgeHookAccessHeaders(null), {});
+  assert.deepEqual(arcforgeHookAccessHeaders("no-separator"), {});
+  assert.deepEqual(arcforgeHookAccessHeaders(":secret"), {});
+  assert.deepEqual(arcforgeHookAccessHeaders("id.access:"), {});
+  const headers = arcforgeHookAccessHeaders("id.access:se:cret");
+  assert.deepEqual(headers, {
+    "cf-access-client-id": "id.access",
+    "cf-access-client-secret": "se:cret",
+  });
+  const seen: RequestInit[] = [];
+  const capture = (async (_url: string, init: RequestInit) => {
+    seen.push(init);
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  }) as typeof fetch;
+  await postArcforgeHook(
+    "https://team.arcforge.au/hooks/agent",
+    "t",
+    { idempotencyKey: "k" },
+    capture,
+    headers,
+  );
+  await postArcforgeHook(
+    "https://team.arcforge.au/hooks/agent",
+    "t",
+    { idempotencyKey: "k" },
+    capture,
+  );
+  const sent = seen[0].headers as Record<string, string>;
+  assert.equal(sent["cf-access-client-id"], "id.access");
+  assert.equal(sent["cf-access-client-secret"], "se:cret");
+  assert.equal(sent.authorization, "Bearer t");
+  assert.equal((seen[1].headers as Record<string, string>)["cf-access-client-id"], undefined);
 });
 
 test("worker route verifies the webhook signature before routing", async () => {

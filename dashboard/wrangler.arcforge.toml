@@ -2,7 +2,10 @@ name = "clawsweeper-status"
 main = "arcforge-entry.ts"
 account_id = "fdc03af65091401927c0557d895df743"
 compatibility_date = "2026-05-11"
-workers_dev = true
+# Only the Access-guarded custom domain serves this Worker; a workers.dev
+# address would reach every route without Cloudflare Access.
+workers_dev = false
+preview_urls = false
 
 [triggers]
 crons = ["*/5 * * * *"]

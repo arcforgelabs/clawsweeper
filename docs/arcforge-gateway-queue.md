@@ -30,7 +30,11 @@ pull requests and maintainer `@clawsweeper review` commands on pull requests
 enter the durable queue; opened or reopened issues and review commands on issues
 go to the OpenClaw hook at `team.arcforge.au/hooks/agent`
 (`CLAWSWEEPER_OPENCLAW_HOOK_TOKEN`) as an admission-only request, because GitHub
-abandons a delivery after ten seconds. Only repositories in
+abandons a delivery after ten seconds. Cloudflare Access guards that hook path with Service
+Auth, so the Worker also sends the Access service token from the secret
+`ARCFORGE_HOOK_ACCESS_SERVICE_TOKEN` (`<client id>:<client secret>`). The
+Worker serves only its Access-guarded custom domain: `workers_dev` and
+`preview_urls` are off. Only repositories in
 `ARCFORGE_ACTIVITY_REPOSITORIES` are routed. Failed deliveries appear in the
 webhook's recent deliveries and can be redelivered there. No Actions minutes are
 spent on intake.
