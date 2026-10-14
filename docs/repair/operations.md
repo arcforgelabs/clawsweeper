@@ -226,6 +226,9 @@ Required repository configuration:
 - `CLAWSWEEPER_OPENCLAW_HOOK_URL` secret: OpenClaw hook base URL or full
   `/hooks/agent` URL.
 - `CLAWSWEEPER_OPENCLAW_HOOK_TOKEN` secret: bearer token for the hook.
+- `CLAWSWEEPER_OPENCLAW_HOOK_ACCESS_SERVICE_TOKEN` optional secret: Cloudflare
+  Access service token as `<client id>:<client secret>`, for a hook path that
+  Access guards with Service Auth. The sender then refuses redirects.
 - `CLAWSWEEPER_DISCORD_TARGET` variable: Discord delivery target such as
   `channel:<id>`.
 - `CLAWSWEEPER_OPENCLAW_AGENT_ID` variable: optional, defaults to `clawsweeper`.

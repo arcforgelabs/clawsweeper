@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createServer } from "node:http";
 import test from "node:test";
 
 import {
   isTransientOpenClawHookError,
+  openClawHookAccessHeaders,
   OpenClawHookHttpError,
   postOpenClawAgentHook,
   resolveOpenClawHookConfig,
@@ -383,4 +385,87 @@ test("isTransientOpenClawHookError classifies retryable HTTP statuses and socket
   assert.equal(isTransientOpenClawHookError(new OpenClawHookHttpError(502, "bad")), true);
   assert.equal(isTransientOpenClawHookError(new OpenClawHookHttpError(401, "bad")), false);
   assert.equal(isTransientOpenClawHookError(new Error("read ECONNRESET")), true);
+});
+
+test("hook posts send the Access service token only when it is configured", async () => {
+  assert.deepEqual(openClawHookAccessHeaders(null), {});
+  assert.deepEqual(openClawHookAccessHeaders("no-separator"), {});
+  assert.deepEqual(openClawHookAccessHeaders("id.access:"), {});
+  assert.equal(
+    resolveOpenClawHookConfig({
+      CLAWSWEEPER_OPENCLAW_HOOK_URL: "https://claw.example/hooks",
+      CLAWSWEEPER_OPENCLAW_HOOK_TOKEN: "secret",
+      CLAWSWEEPER_DISCORD_TARGET: "channel:123",
+      CLAWSWEEPER_OPENCLAW_HOOK_ACCESS_SERVICE_TOKEN: "id.access:se:cret",
+    })?.accessServiceToken,
+    "id.access:se:cret",
+  );
+  const seen: Record<string, string>[] = [];
+  const fetcher = (async (_url: string, init: RequestInit) => {
+    seen.push(init.headers as Record<string, string>);
+    return new Response(JSON.stringify({ ok: true, runId: "r" }), { status: 200 });
+  }) as typeof fetch;
+  await postOpenClawAgentHook({
+    config: { ...config, accessServiceToken: "id.access:se:cret" },
+    fetcher,
+    post,
+  });
+  await postOpenClawAgentHook({ config, fetcher, post });
+  assert.equal(seen[0]["cf-access-client-id"], "id.access");
+  assert.equal(seen[0]["cf-access-client-secret"], "se:cret");
+  assert.equal(seen[0].authorization, "Bearer secret");
+  assert.equal(seen[1]["cf-access-client-id"], undefined);
+});
+
+test("hook posts never follow a redirect with the Access service token", async () => {
+  const leaked: string[] = [];
+  const other = createServer((request, response) => {
+    leaked.push(String(request.headers["cf-access-client-secret"] ?? ""));
+    response.end("{}");
+  });
+  await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve));
+  const otherPort = (other.address() as { port: number }).port;
+  const hook = createServer((_request, response) => {
+    response.writeHead(307, { location: `http://localhost:${otherPort}/hooks/agent` });
+    response.end();
+  });
+  await new Promise<void>((resolve) => hook.listen(0, "127.0.0.1", resolve));
+  const hookPort = (hook.address() as { port: number }).port;
+  try {
+    await assert.rejects(
+      postOpenClawAgentHook({
+        config: {
+          ...config,
+          hookUrl: `http://127.0.0.1:${hookPort}/hooks/agent`,
+          accessServiceToken: "id.access:se:cret",
+          retryAttempts: 1,
+        },
+        fetcher: fetch,
+        post,
+      }),
+      (error: unknown) => error instanceof OpenClawHookHttpError && error.status === 307,
+    );
+    assert.deepEqual(leaked, []);
+  } finally {
+    hook.close();
+    other.close();
+  }
+});
+
+test("hook diagnostics redact the Access service secret", async () => {
+  const fetcher = (async () =>
+    new Response("echo cf-access-client-secret: se:cret and Bearer secret", {
+      status: 400,
+    })) as typeof fetch;
+  await assert.rejects(
+    postOpenClawAgentHook({
+      config: { ...config, accessServiceToken: "id.access:se:cret", retryAttempts: 1 },
+      fetcher,
+      post,
+    }),
+    (error: unknown) =>
+      error instanceof OpenClawHookHttpError &&
+      !error.message.includes("se:cret") &&
+      !error.message.includes("Bearer secret"),
+  );
 });

@@ -91,6 +91,9 @@ Each hook-backed event should use this repository configuration shape:
 - `CLAWSWEEPER_OPENCLAW_HOOK_URL` secret: OpenClaw hook base URL or full
   `/hooks/agent` URL.
 - `CLAWSWEEPER_OPENCLAW_HOOK_TOKEN` secret: bearer token for the hook.
+- `CLAWSWEEPER_OPENCLAW_HOOK_ACCESS_SERVICE_TOKEN` optional secret: Cloudflare
+  Access service token as `<client id>:<client secret>`, for a hook path that
+  Access guards with Service Auth. The sender then refuses redirects.
 - `CLAWSWEEPER_OPENCLAW_AGENT_ID` variable: target agent id, usually
   `clawsweeper`.
 - event-specific delivery variable, such as `CLAWSWEEPER_DISCORD_TARGET`.

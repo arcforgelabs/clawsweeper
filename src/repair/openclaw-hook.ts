@@ -9,6 +9,9 @@ export type OpenClawHookConfig = {
   thinking: string;
   timeoutSeconds: number;
   retryAttempts: number;
+  // Cloudflare Access service token as "<client id>:<client secret>", for a hook
+  // path that Access guards with Service Auth.
+  accessServiceToken?: string | null;
 };
 
 export type OpenClawHookPost = {
@@ -66,6 +69,18 @@ export function resolveOpenClawHookConfig(env: NodeJS.ProcessEnv): OpenClawHookC
       env.CLAWSWEEPER_OPENCLAW_HOOK_RETRY_ATTEMPTS,
       DEFAULT_RETRY_ATTEMPTS,
     ),
+    accessServiceToken: normalizeString(env.CLAWSWEEPER_OPENCLAW_HOOK_ACCESS_SERVICE_TOKEN) ?? null,
+  };
+}
+
+export function openClawHookAccessHeaders(
+  serviceToken: string | null | undefined,
+): Record<string, string> {
+  const separator = serviceToken?.indexOf(":") ?? -1;
+  if (!serviceToken || separator <= 0 || separator === serviceToken.length - 1) return {};
+  return {
+    "cf-access-client-id": serviceToken.slice(0, separator),
+    "cf-access-client-secret": serviceToken.slice(separator + 1),
   };
 }
 
@@ -118,10 +133,16 @@ async function postOpenClawAgentHookOnce({
   fetcher: typeof fetch;
   post: OpenClawHookPost;
 }): Promise<OpenClawHookPostResult> {
+  const accessHeaders = openClawHookAccessHeaders(config.accessServiceToken);
+  const secrets = [config.token, accessHeaders["cf-access-client-secret"] ?? ""];
+  // A followed redirect would carry the Access service token to the new host,
+  // so a redirect is a failed post.
   const response = await fetcher(config.hookUrl, {
     method: "POST",
+    redirect: "manual",
     signal: AbortSignal.timeout((config.timeoutSeconds + 15) * 1000),
     headers: {
+      ...accessHeaders,
       authorization: `Bearer ${config.token}`,
       "content-type": "application/json",
       "idempotency-key": post.idempotencyKey,
@@ -143,7 +164,7 @@ async function postOpenClawAgentHookOnce({
   if (!response.ok) {
     throw new OpenClawHookHttpError(
       response.status,
-      boundedText(body, MAX_DIAGNOSTIC_CHARS, [config.token]) ?? "",
+      boundedText(body, MAX_DIAGNOSTIC_CHARS, secrets) ?? "",
     );
   }
   const parsed = parseHookBody(body);
@@ -153,7 +174,7 @@ async function postOpenClawAgentHookOnce({
     delivery:
       parsed.ok === true && runId && !Object.hasOwn(parsed, "completion")
         ? hookDelivery("admitted")
-        : classifyHookDelivery(parsed.completion, post.deliver, config.token),
+        : classifyHookDelivery(parsed.completion, post.deliver, secrets),
   };
 }
 
@@ -247,7 +268,7 @@ export function errorText(error: unknown): string {
 function classifyHookDelivery(
   value: unknown,
   deliveryRequested: boolean,
-  token: string,
+  secrets: readonly string[],
 ): OpenClawHookDelivery {
   if (!isJsonObject(value)) {
     return hookDelivery("unknown");
@@ -257,7 +278,7 @@ function classifyHookDelivery(
     return hookDelivery("unknown");
   }
 
-  const error = boundedText(value.deliveryError, MAX_DIAGNOSTIC_CHARS, [token]);
+  const error = boundedText(value.deliveryError, MAX_DIAGNOSTIC_CHARS, secrets);
   const suppressionReason = boundedText(
     value.deliverySuppressionReason,
     MAX_SUPPRESSION_REASON_CHARS,
