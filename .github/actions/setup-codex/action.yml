@@ -135,9 +135,19 @@ runs:
         test -n "${OPENAI_API_KEY:-}"
         server_info="$CODEX_HOME/responses-proxy.json"
         node -e 'require("node:fs").rmSync(process.argv[1], { force: true })' "$server_info"
+        # A deployment may send Responses calls through its own model gateway.
+        # Unset keeps the proxy's default, https://api.openai.com/v1/responses.
+        upstream_args=()
+        if [[ -n "${CLAWSWEEPER_CODEX_UPSTREAM_URL:-}" ]]; then
+          if [[ "$CLAWSWEEPER_CODEX_UPSTREAM_URL" != https://* ]]; then
+            echo "CLAWSWEEPER_CODEX_UPSTREAM_URL must be an https URL" >&2
+            exit 1
+          fi
+          upstream_args=(--upstream-url "$CLAWSWEEPER_CODEX_UPSTREAM_URL")
+        fi
         (
           printenv OPENAI_API_KEY | env -u OPENAI_API_KEY -u CODEX_API_KEY -u PROXY_API_KEY \
-            codex-responses-api-proxy --http-shutdown --server-info "$server_info"
+            codex-responses-api-proxy --http-shutdown --server-info "$server_info" "${upstream_args[@]}"
         ) &
         for _ in {1..100}; do
           [[ -s "$server_info" ]] && break
