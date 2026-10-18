@@ -1,4 +1,5 @@
-import { sha256 } from "./content-hash.js";
+import { assertNoDuplicateJsonObjectKeys } from "./unique-json-object-keys.ts";
+import { sha256 } from "./content-hash.ts";
 import { isIP } from "node:net";
 import path from "node:path";
 
@@ -13,8 +14,8 @@ import {
   writeUtf8FileCreateOnlyNoFollow,
   type SafeWriteTarget,
   type SafeReadRoot,
-} from "./action-ledger-files.js";
-import { normalizeRepo, slugForRepo } from "./repository-profiles.js";
+} from "./action-ledger-files.ts";
+import { normalizeRepo, slugForRepo } from "./repository-identity.ts";
 
 export const ACTION_EVENT_SCHEMA = "clawsweeper.state-ledger-event.v1";
 
@@ -806,9 +807,17 @@ export function actionEventShardRelativePath(
   shardCount?: number,
 ): string {
   assertRawActionEventShardInput(events, ACTION_EVENT_SHARD_FILE_LIMITS.maxEvents);
-  const normalizedIdentity = normalizeShardIdentity(identity);
   const normalizedEvents = normalizeShardEvents(events);
   if (normalizedEvents.length === 0) throw new Error("action event shard requires events");
+  return actionEventShardIdentityRelativePath(identity, shardIndex, shardCount);
+}
+
+function actionEventShardIdentityRelativePath(
+  identity: ActionEventShardIdentity,
+  shardIndex?: number,
+  shardCount?: number,
+): string {
+  const normalizedIdentity = normalizeShardIdentity(identity);
   if ((shardIndex === undefined) !== (shardCount === undefined)) {
     throw new Error("action event shard index and count must be provided together");
   }
@@ -837,7 +846,7 @@ export function actionEventShardRelativePath(
       : `${filenameBase}-part-${String(normalizedShardIndex).padStart(6, "0")}-of-${String(
           normalizedShardCount,
         ).padStart(6, "0")}`;
-  return path.join(
+  return path.posix.join(
     "ledger",
     "v1",
     "events",
@@ -856,8 +865,8 @@ export function actionEventShardImportBindingRelativePaths(identity: ActionEvent
 } {
   const digest = sha256(actionLedgerJson(normalizeShardIdentity(identity)));
   return {
-    reservation: path.join("ledger", "v1", "import-bindings", "shard-sets", `${digest}.json`),
-    completion: path.join(
+    reservation: path.posix.join("ledger", "v1", "import-bindings", "shard-sets", `${digest}.json`),
+    completion: path.posix.join(
       "ledger",
       "v1",
       "import-bindings",
@@ -1093,11 +1102,12 @@ function readOptionalImportBinding(root: SafeReadRoot, relativePath: string): st
   return readUtf8FileIfExistsNoFollow(target, ACTION_LEDGER_CANONICAL_JSON_LIMITS.maxBytes);
 }
 
-function parseActionEventShardImportReservation(
+export function parseActionEventShardImportReservation(
   content: string,
-  identity: ReturnType<typeof normalizeShardIdentity>,
+  identity: ActionEventShardIdentity | null,
   source: string,
 ): {
+  identity: ActionEventShardIdentity;
   shards: Array<{ path: string; replay_sha256: string }>;
 } {
   let value: unknown;
@@ -1112,6 +1122,7 @@ function parseActionEventShardImportReservation(
     producer?: unknown;
     shards?: unknown;
   };
+  identity = normalizeShardIdentity(identity ?? (reservation.producer as ActionEventShardIdentity));
   const shards = Array.isArray(reservation.shards)
     ? reservation.shards.map((entry) => {
         const shard = entry as { path?: unknown; replay_sha256?: unknown };
@@ -1143,10 +1154,26 @@ function parseActionEventShardImportReservation(
   ) {
     throw new Error(`invalid action event shard import transaction: ${source}`);
   }
-  return { shards };
+  // A reservation can only name its own complete, ordered producer part set.
+  // Hydration uses these paths for closure reads and staged exclusion.
+  for (const [index, shard] of shards.entries()) {
+    const part = /-part-(\d{6})-of-(\d{6})\.jsonl$/.exec(shard.path);
+    if (
+      (!part && shards.length !== 1) ||
+      (part && (Number(part[1]) !== index + 1 || Number(part[2]) !== shards.length)) ||
+      shard.path !==
+        actionEventShardIdentityRelativePath(
+          identity,
+          part ? index + 1 : undefined,
+          part ? shards.length : undefined,
+        ).replaceAll(path.sep, "/")
+    )
+      throw new Error(`invalid action event shard import transaction: ${source}`);
+  }
+  return { identity, shards };
 }
 
-function parseActionEventShardImportCompletion(
+export function parseActionEventShardImportCompletion(
   content: string,
   identity: ReturnType<typeof normalizeShardIdentity>,
   reservationSha256: string,
@@ -1884,127 +1911,12 @@ function parseCanonicalActionEventFile(content: string, source: string): ActionE
 }
 
 function parseCanonicalActionEventJson(content: string, source: string): ActionEvent {
-  assertNoDuplicateJsonObjectKeys(content, source);
+  assertNoDuplicateJsonObjectKeys(content, source, ACTION_LEDGER_CANONICAL_JSON_LIMITS);
   const event = validateActionEvent(JSON.parse(content) as unknown, source);
   if (actionLedgerJson(event) !== content) {
     throw new Error(`action event JSON is not canonical: ${source}`);
   }
   return event;
-}
-
-function assertNoDuplicateJsonObjectKeys(content: string, source: string): void {
-  let index = 0;
-  let nodes = 0;
-  const numberPattern = /-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/y;
-
-  const fail = (): never => {
-    throw new Error(`invalid action event JSON: ${source}`);
-  };
-  const skipWhitespace = (): void => {
-    while (index < content.length && /[\t\n\r ]/.test(content[index]!)) index += 1;
-  };
-  const parseString = (): string => {
-    if (content[index] !== '"') fail();
-    const start = index;
-    index += 1;
-    while (index < content.length) {
-      const character = content[index]!;
-      index += 1;
-      if (character === '"') {
-        try {
-          const value = JSON.parse(content.slice(start, index)) as unknown;
-          if (typeof value !== "string") fail();
-          return value as string;
-        } catch {
-          fail();
-        }
-      }
-      if (character === "\\") {
-        if (index >= content.length) fail();
-        index += 1;
-      } else if (character.charCodeAt(0) < 0x20) {
-        fail();
-      }
-    }
-    return fail();
-  };
-  const parseValue = (depth: number): void => {
-    nodes += 1;
-    if (
-      nodes > ACTION_LEDGER_CANONICAL_JSON_LIMITS.maxNodes ||
-      depth > ACTION_LEDGER_CANONICAL_JSON_LIMITS.maxDepth
-    ) {
-      throw new Error(`action event JSON exceeds canonical complexity limits: ${source}`);
-    }
-    skipWhitespace();
-    const character = content[index];
-    if (character === "{") {
-      index += 1;
-      skipWhitespace();
-      const keys = new Set<string>();
-      if (content[index] === "}") {
-        index += 1;
-        return;
-      }
-      while (index < content.length) {
-        const key = parseString();
-        if (keys.has(key)) {
-          throw new Error(`action event JSON contains a duplicate object key: ${source}`);
-        }
-        keys.add(key);
-        skipWhitespace();
-        if (content[index] !== ":") fail();
-        index += 1;
-        parseValue(depth + 1);
-        skipWhitespace();
-        if (content[index] === "}") {
-          index += 1;
-          return;
-        }
-        if (content[index] !== ",") fail();
-        index += 1;
-        skipWhitespace();
-      }
-      fail();
-    }
-    if (character === "[") {
-      index += 1;
-      skipWhitespace();
-      if (content[index] === "]") {
-        index += 1;
-        return;
-      }
-      while (index < content.length) {
-        parseValue(depth + 1);
-        skipWhitespace();
-        if (content[index] === "]") {
-          index += 1;
-          return;
-        }
-        if (content[index] !== ",") fail();
-        index += 1;
-      }
-      fail();
-    }
-    if (character === '"') {
-      parseString();
-      return;
-    }
-    for (const literal of ["true", "false", "null"]) {
-      if (content.startsWith(literal, index)) {
-        index += literal.length;
-        return;
-      }
-    }
-    numberPattern.lastIndex = index;
-    const match = numberPattern.exec(content);
-    if (!match) fail();
-    index = numberPattern.lastIndex;
-  };
-
-  parseValue(0);
-  skipWhitespace();
-  if (index !== content.length) fail();
 }
 
 export function validateActionEvent(value: unknown, source = "action event"): ActionEvent {

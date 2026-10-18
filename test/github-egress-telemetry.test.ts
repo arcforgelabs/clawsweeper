@@ -14,6 +14,7 @@ import {
 } from "../dist/github-egress-descriptor.js";
 import {
   observeGitHubDebugStderr,
+  recordGitHubHttpRead,
   recordGithubEgressBrokerEvent,
   recordGithubEgressMember,
   recordUnobservedGitHubInvocation,
@@ -25,6 +26,37 @@ import {
 import { MemoryDurableStorage } from "./dashboard-worker-harness.ts";
 
 const NOW = Date.parse("2026-08-12T12:00:00.000Z");
+
+test("lossless receipt reads preserve bounded wire and rate-limit accounting", () => {
+  const root = mkdtempSync(join(tmpdir(), "clawsweeper-egress-receipt-"));
+  try {
+    const metricsPath = join(root, "metrics.jsonl");
+    const rateLimitPath = join(root, "rate-limits.jsonl");
+    recordGitHubHttpRead(
+      ["api", "repos/private-owner/private-repo/issues/991/comments?per_page=100&page=2"],
+      429,
+      new Map([
+        ["retry-after", "5"],
+        ["etag", "private-etag"],
+        ["x-github-request-id", "private-request"],
+      ]),
+      20,
+      observerEnv(metricsPath, rateLimitPath),
+    );
+    const metrics = jsonLines(metricsPath);
+    assert.equal(metrics.length, 2);
+    assert.ok(metrics.every((entry) => entry.telemetryComplete === true));
+    assert.equal(metrics[0]!.unit, "wire_attempt");
+    assert.equal(metrics[0]!.pageBucket, "2");
+    assert.equal(metrics[0]!.operation, "comments");
+    assert.equal(metrics[1]!.unit, "invocation");
+    assert.equal(jsonLines(rateLimitPath)[0]!.status, 429);
+    const persisted = readFileSync(metricsPath, "utf8") + readFileSync(rateLimitPath, "utf8");
+    assert.doesNotMatch(persisted, /private-owner|private-repo|private-etag|private-request/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("GH_DEBUG observation counts paginated wire attempts and strips unsafe diagnostics", () => {
   const root = mkdtempSync(join(tmpdir(), "clawsweeper-egress-observer-"));
@@ -828,6 +860,67 @@ test("signed upload, SQLite restart, retention, cardinality, and public privacy 
   }
 });
 
+test("egress retention cadence is shared by uploads and public reads", () => {
+  const storage = new MemoryDurableStorage();
+  const store = new GithubEgressTelemetryStore(storage);
+  store.ensureSchemaSync();
+  store.ingest(telemetryBody("1".repeat(64), NOW), NOW);
+  storage.sql.exec(
+    "INSERT INTO exact_review_github_egress_receipts_v2 (receipt_id, observed_at) VALUES (?, ?)",
+    "expired",
+    NOW - 7 * 24 * 60 * 60_000 - 1,
+  );
+  store.ingest(telemetryBody("2".repeat(64), NOW), NOW + 1);
+  store.publicSummary(NOW + 2);
+  store.publicObservability(1, NOW + 3);
+  const expiredReceipt = () =>
+    Array.from(
+      storage.sql.exec(
+        "SELECT receipt_id FROM exact_review_github_egress_receipts_v2 WHERE receipt_id = 'expired'",
+      ),
+    );
+  assert.equal(expiredReceipt().length, 1);
+  store.publicSummary(NOW + 5 * 60_000);
+  assert.equal(expiredReceipt().length, 0);
+  assert.equal(store.publicSummary(NOW + 5 * 60_000).units.wire_attempt, 2);
+});
+
+test("egress cap counts recover after rollback and count repeated metrics once", () => {
+  const storage = new MemoryDurableStorage();
+  const store = new GithubEgressTelemetryStore(storage, { maxRollupRows: 2 });
+  store.ensureSchemaSync();
+  const oldBody = telemetryBody("1".repeat(64), NOW - 2 * 60 * 60_000);
+  assert.equal(store.ingest(oldBody, NOW).ok, true);
+  const repeated = telemetryBody("2".repeat(64), NOW - 5 * 60_000);
+  repeated.metrics.push({ ...repeated.metrics[0]! });
+  const exec = storage.sql.exec.bind(storage.sql);
+  let fail = true;
+  storage.sql.exec = (query, ...bindings) => {
+    if (fail && query.includes("SET accepted_submissions = accepted_submissions + 1")) {
+      fail = false;
+      throw new Error("rollback after cap eviction");
+    }
+    return exec(query, ...bindings);
+  };
+  assert.throws(() => store.ingest(repeated, NOW), /rollback after cap eviction/);
+  assert.equal(store.ingest(repeated, NOW).ok, true);
+  assert.equal(store.ingest(repeated, NOW).deduped, true);
+  const expectedStorage = new MemoryDurableStorage();
+  const expected = new GithubEgressTelemetryStore(expectedStorage, { maxRollupRows: 2 });
+  expected.ensureSchemaSync();
+  expected.ingest(oldBody, NOW);
+  expected.ingest(repeated, NOW);
+  expected.ingest(repeated, NOW);
+  assert.deepEqual(store.publicSummary(NOW), expected.publicSummary(NOW));
+  for (const hours of [0.25, 1, 6, 24, 168]) {
+    assert.deepEqual(
+      store.publicObservability(hours, NOW),
+      expected.publicObservability(hours, NOW),
+    );
+  }
+  assert.equal(store.publicObservability(1, NOW)?.units.wire_attempt, 2);
+});
+
 test("cap eviction watermarks preserve intact short windows without synthesizing missing buckets", () => {
   const storage = new MemoryDurableStorage();
   const store = new GithubEgressTelemetryStore(storage, {
@@ -927,6 +1020,15 @@ test("legacy eviction diagnostics migrate conservatively across restart", () => 
     maskedOneHour.retention.last_rollup_evicted_bucket_start,
     new Date(recentFiveMinuteBoundary).toISOString(),
     "an older retained hourly row cannot mask a five-minute legacy boundary",
+  );
+  const changes = () =>
+    Number([...storage.sql.exec("SELECT total_changes() AS n")][0]?.n ?? Number.NaN);
+  const beforeSettledStart = changes();
+  new GithubEgressTelemetryStore(storage).ensureSchemaSync();
+  assert.equal(
+    changes() - beforeSettledStart,
+    0,
+    "a migrated row is not rewritten on later starts",
   );
 
   storage.sql.exec("DELETE FROM exact_review_github_egress_rollups_v2");

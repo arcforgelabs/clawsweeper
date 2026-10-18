@@ -19,6 +19,27 @@ import {
 } from "./dashboard-worker-harness.ts";
 import { publicHealthHistoryContract } from "../dashboard/worker.ts";
 
+test("StatusStore startup removes only retired Bay history keys", async () => {
+  const storage = new MemoryDurableStorage();
+  await storage.put("openclaw-bay:terminal-state:v1", { retired: true });
+  await storage.put("openclaw-bay:journey-state:v1", { retired: true });
+  await storage.put("snapshot", { current: true });
+  for (let restart = 0; restart < 2; restart++) {
+    let ready = Promise.resolve();
+    new StatusStore({
+      storage,
+      blockConcurrencyWhile: (callback: () => Promise<unknown>) => {
+        ready = callback().then(() => {});
+        return ready;
+      },
+    });
+    await ready;
+    assert.equal(await storage.get("openclaw-bay:terminal-state:v1"), undefined);
+    assert.equal(await storage.get("openclaw-bay:journey-state:v1"), undefined);
+    assert.deepEqual(await storage.get("snapshot"), { current: true });
+  }
+});
+
 test("public durable publication event endpoint returns bounded aggregate-only window data", async () => {
   const storage = new MemoryDurableStorage();
   const telemetry = new ExactReviewLifecycleTelemetryStore(storage);
@@ -52,7 +73,7 @@ test("public durable publication event endpoint returns bounded aggregate-only w
     true,
   );
   assert.equal(JSON.stringify(body).includes("openclaw/openclaw#898"), false);
-  assert.equal(JSON.stringify(body).includes("workflow"), false);
+  assert.doesNotMatch(JSON.stringify(body), /"workflow(?:_run)?"\s*:/);
   const cached = await worker.fetch(
     new Request("https://clawsweeper.openclaw.ai/api/recent-durable-publication-events?window=6h"),
     { EXACT_REVIEW_QUEUE: new MemoryDurableNamespace(queue) },

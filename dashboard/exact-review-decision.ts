@@ -1,9 +1,5 @@
 import { stableJson } from "../src/stable-json.ts";
 import {
-  validProofAllowedScenarios,
-  type InlineProofScenario,
-} from "../src/repair/direct-re-review-admission.ts";
-import {
   decisionPublicationPolicy,
   MANUAL_REVIEW_SOURCE_ACTION,
   type PublicationPolicy,
@@ -58,7 +54,6 @@ export type ExactReviewBaseDecision = {
   statusCommentId?: number;
   reviewAcknowledgementCommentId?: number;
   additionalPrompt?: string;
-  proofAllowedScenarios?: InlineProofScenario[];
   sourceCommentId?: number;
   sourceCommentUpdatedAt?: string;
   commandBodyDigest?: string;
@@ -87,15 +82,6 @@ export type ExactReviewPublication = {
 export type ExactReviewDecision = ExactReviewBaseDecision & {
   publication?: ExactReviewPublication;
 };
-export function exactReviewProofAllowedScenarios(
-  decision: ExactReviewBaseDecision,
-): InlineProofScenario[] {
-  const supported: InlineProofScenario[] = ["web-ui-chat-proof", "telegram-bot-e2e-proof"];
-  if (!Object.hasOwn(decision, "proofAllowedScenarios")) return supported;
-  return validProofAllowedScenarios(decision.proofAllowedScenarios)
-    ? supported.filter((scenario) => decision.proofAllowedScenarios!.includes(scenario))
-    : [];
-}
 export type ExactReviewIngress = {
   route: "direct_webhook" | "target_dispatcher";
   fingerprint: string;
@@ -135,6 +121,9 @@ export type ExactReviewTargetItemState =
   | {
       state: "open";
       headSha?: string;
+      prReview?: { signature: string };
+      // Automatic work whose author must request a review (maintainer policy).
+      maintainerRequestRequired?: true;
       sourceIdentity?: Pick<
         ExactReviewDecision,
         | "sourceHeadSha"
@@ -392,9 +381,6 @@ export function exactReviewBaseDecisionFrom(value: unknown): ExactReviewBaseDeci
     : undefined;
   const hasAdditionalPrompt = Object.hasOwn(decision, "additionalPrompt");
   const additionalPrompt = hasAdditionalPrompt ? decision.additionalPrompt : undefined;
-  const hasProofAllowedScenarios = Object.hasOwn(decision, "proofAllowedScenarios");
-  const proofAllowedScenarios = decision.proofAllowedScenarios;
-  if (hasProofAllowedScenarios && !validProofAllowedScenarios(proofAllowedScenarios)) return null;
   const hasSourceCommentId = Object.hasOwn(decision, "sourceCommentId");
   const sourceCommentId = hasSourceCommentId ? Number(decision.sourceCommentId) : undefined;
   const hasSourceCommentUpdatedAt = Object.hasOwn(decision, "sourceCommentUpdatedAt");
@@ -522,9 +508,6 @@ export function exactReviewBaseDecisionFrom(value: unknown): ExactReviewBaseDeci
     ...(statusCommentId === undefined ? {} : { statusCommentId }),
     ...(reviewAcknowledgementCommentId === undefined ? {} : { reviewAcknowledgementCommentId }),
     ...(typeof additionalPrompt === "string" ? { additionalPrompt } : {}),
-    ...(hasProofAllowedScenarios
-      ? { proofAllowedScenarios: [...(proofAllowedScenarios as InlineProofScenario[])].sort() }
-      : {}),
     ...(sourceCommentId === undefined ? {} : { sourceCommentId }),
     ...(sourceCommentUpdatedAt === undefined ? {} : { sourceCommentUpdatedAt }),
     ...(commandBodyDigest === undefined ? {} : { commandBodyDigest }),
@@ -574,7 +557,6 @@ export async function exactReviewEditedSemanticInput(
         ? decision.statusCommentId
         : null,
       additional_prompt: decision.additionalPrompt || null,
-      proof_allowed_scenarios: exactReviewProofAllowedScenarios(decision),
     },
   });
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(tuple));
@@ -793,6 +775,46 @@ export function mergePendingExactReviewDecision(
   return merged;
 }
 
+/** The fields that belong to one command request. */
+const EXACT_REVIEW_COMMAND_FIELDS = [
+  "commandStatusMarker",
+  "statusCommentId",
+  "sourceDeliveryId",
+  "sourceCommentId",
+  "sourceCommentUpdatedAt",
+  "sourceCommentVerified",
+  "commandBodyDigest",
+  "commandOrigin",
+  "additionalPrompt",
+] as const;
+
+/** The decision without the fields that belong to one command request. */
+export function exactReviewDecisionWithoutCommand(decision: ExactReviewDecision) {
+  const rest = { ...decision };
+  for (const field of EXACT_REVIEW_COMMAND_FIELDS) delete rest[field];
+  return rest;
+}
+
+/**
+ * A queued review that takes over the command request `command` carries. The
+ * queued source stays; only the request's fields and source action move, and a
+ * failed-review retry's source pin is dropped because it belongs to that retry.
+ */
+export function exactReviewDecisionWithCommand(
+  queued: ExactReviewDecision,
+  command: ExactReviewDecision,
+): ExactReviewDecision {
+  const { expectedSourceRevision: _expectedSourceRevision, ...source } =
+    exactReviewDecisionWithoutCommand(queued);
+  const request = Object.fromEntries(
+    EXACT_REVIEW_COMMAND_FIELDS.filter((field) => command[field] !== undefined).map((field) => [
+      field,
+      command[field],
+    ]),
+  );
+  return { ...source, ...request, sourceAction: command.sourceAction };
+}
+
 export function exactReviewDecisionHasCommandContext(
   decision: Pick<ExactReviewDecision, "commandStatusMarker" | "statusCommentId">,
 ) {
@@ -808,6 +830,27 @@ export function exactReviewCommandObligationSurvives(
   return (
     (current.commandStatusMarker ?? null) === (incoming.commandStatusMarker ?? null) &&
     (current.statusCommentId ?? null) === (incoming.statusCommentId ?? null)
+  );
+}
+
+/** Whether `incoming` repeats the verified command request that `held` carries. */
+export function exactReviewSameVerifiedCommand(
+  held: ExactReviewBaseDecision,
+  incoming: ExactReviewBaseDecision,
+) {
+  return (
+    held.sourceCommentVerified === true &&
+    exactReviewDecisionHasCommandContext(held) &&
+    (
+      [
+        "commandStatusMarker",
+        "statusCommentId",
+        "sourceCommentId",
+        "sourceCommentUpdatedAt",
+        "commandBodyDigest",
+        "commandOrigin",
+      ] as const
+    ).every((field) => held[field] === incoming[field])
   );
 }
 
@@ -976,6 +1019,17 @@ export function isImmediateExactReviewDecision(
 
 export function isLowPriorityExactReviewDecision(decision: ExactReviewDecision) {
   return EXACT_REVIEW_LOW_PRIORITY_SOURCE_ACTIONS.has(decision.sourceAction);
+}
+
+/**
+ * Backpressure and a GitHub throttle may shed recovery work. A recovery that
+ * still carries command context continues that command, whose status needs a
+ * terminal answer, so it is admitted like the command itself.
+ */
+export function isSheddableExactReviewRecovery(decision: ExactReviewDecision) {
+  return (
+    isLowPriorityExactReviewDecision(decision) && !exactReviewDecisionHasCommandContext(decision)
+  );
 }
 
 export function exactReviewQueueIsPublication(item: Pick<ExactReviewQueueItem, "decision">) {
