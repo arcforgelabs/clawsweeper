@@ -60,10 +60,10 @@ CLAWSWEEPER_STATE_REPO = "arcforgelabs/clawsweeper-state"
 CLAWSWEEPER_BOT_LOGINS = "arc-forge-clawsweeper[bot]"
 CLAWSWEEPER_APP_CLIENT_ID = "Iv23li0ZukB8Rb86dvTp"
 CLAWSWEEPER_CRABFLEET_URL = ""
-TARGET_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/themes"
+TARGET_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/flow,arcforgelabs/themes"
 # Explicit public-only allowlist for canonical repository + issue/PR references
 # rendered in Overview. Repositories must be verified public before addition.
-PUBLIC_BAY_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/themes"
+PUBLIC_BAY_REPOS = "arcforgelabs/agent-marketplace,arcforgelabs/dictate,arcforgelabs/field,arcforgelabs/flow,arcforgelabs/themes"
 APPLY_TARGET_REPOS = ""
 APPLY_OPTIONAL_TARGET_REPOS = ""
 CLAWSWEEPER_ENABLE_CLAWHUB = "0"

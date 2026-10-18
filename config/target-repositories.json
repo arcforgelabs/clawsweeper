@@ -113,6 +113,17 @@
       "package_manager": "npm"
     },
     {
+      "target_repo": "arcforgelabs/flow",
+      "display_name": "Flow",
+      "checkout_dir": "flow",
+      "prompt_note": "Use the Flow source tree and current default branch. It is invoicing, bill entry and a financial dashboard for labs, with Seazona and Xero integrations behind one integration port; Node is the runtime. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
+    },
+    {
       "target_repo": "arcforgelabs/themes",
       "display_name": "Arc Forge Themes",
       "checkout_dir": "themes",
