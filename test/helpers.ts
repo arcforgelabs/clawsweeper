@@ -134,9 +134,6 @@ export function closeDecision(overrides = {}) {
       "Yes. Current main can be checked by inspecting src/example.ts and git blame evidence.",
     solutionAssessment:
       "Yes. Keeping the implementation as-is is the narrowest maintainable outcome.",
-    visionFit: "not_applicable",
-    visionFitReason: "Vision-fit assessment is not needed for this implemented close decision.",
-    visionFitEvidence: [],
     implementationComplexity: "not_applicable",
     autoImplementationCandidate: "none",
     rootCauseCluster: {
@@ -184,10 +181,6 @@ export function closeDecision(overrides = {}) {
       overallTier: "NA",
       summary: "PR readiness rating is not applicable to this issue cleanup decision.",
       nextSteps: [],
-    },
-    telegramVisibleProof: {
-      status: "not_needed",
-      summary: "This non-PR issue triage does not need Telegram visible proof.",
     },
     featureShowcase: {
       status: "none",
@@ -1202,7 +1195,7 @@ export function reportWithSyncedReviewComment(
         "---",
         `review_comment_sha256: ${sha256ForTest(comment)}`,
         `review_comment_id: ${9000 + number}`,
-        `review_comment_url: https://github.com/openclaw/clawsweeper/issues/${number}#issuecomment-${9000 + number}`,
+        `review_comment_url: https://github.com/${frontMatterValue(report, "repository")}/issues/${number}#issuecomment-${9000 + number}`,
         "review_comment_synced_at: 2026-05-01T01:00:00Z",
         "",
       ].join("\n"),

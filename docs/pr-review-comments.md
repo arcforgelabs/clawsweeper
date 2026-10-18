@@ -102,6 +102,25 @@ the same authorized run reuses its own active lease instead of posting another
 status comment. Exhausted service failures remain failures for normal queue
 recovery, not successful supersession. Other workers' leases remain protected.
 
+A queued command can reuse its acknowledgement ID under a later review owner.
+For the same reviewed revision, a later report may replace the older durable
+review only while a freshly elected status lease matches the report's original
+owner, comment ID, and revision. Missing or expired leases and ambiguous review
+timestamps remain blocked; acquiring a new mutation lease does not establish
+that the original report is newer.
+
+A publication blocked by a verified active review lease records
+`review_lease_active` and the normalized lease deadline in both its step outputs
+and, for batched publication, its member result. The batch completer schedules
+the retry no earlier than that deadline instead of treating it as an unknown failure.
+
+A verified recent issue comment or current-head PR activity can intentionally block
+a close before comment publication. Its policy owner emits a typed hold receipt;
+publication accepts it as guarded open only with the matching open record and
+complete reviewed source/activity receipt. This reports no delivered review and
+no close. Failed reads, missing dates, incomplete receipts and arbitrary
+`kept_open` results remain unproven; changed source requires a fresh review.
+
 Interactive re-review commands have a separate durable intake marker. The
 ExactReviewQueue records the exact source-comment version before creating or
 editing its acknowledgement, then converges on one status comment containing
@@ -402,8 +421,7 @@ change the model's tiers.
 
 Historical post-review verification receipts and recording attachments are
 ignored. They do not alter the recorded proof assessment, readiness, automation
-markers, or rendered comments. Existing stored reports are not rewritten;
-current inline proof returns observations to the original review instead.
+markers, or rendered comments. Existing stored reports are not rewritten.
 
 For OpenClaw PRs, stored-data warnings flag possible persistence changes in
 production source or documented storage contracts, not setup in test, fixture,
@@ -818,8 +836,8 @@ limits the impact.
 
 Review setup opts in with `review-network: "true"`; review commands select
 `--codex-sandbox clawsweeper-review`, translated to Codex configuration
-`default_permissions="clawsweeper-review"`. Neither exec nor the app-server
-thread/turn path overrides that profile with a legacy sandbox policy. Setup
+`default_permissions="clawsweeper-review"`. Exec does not override that profile
+with a legacy sandbox policy. Setup
 fails before publication if allowed HTTPS fails, unlisted HTTPS is not rejected
 by the proxy, or a checkout write succeeds. Non-review callers and offline local
 reviews keep their existing sandbox settings.
