@@ -113,6 +113,17 @@
       "package_manager": "npm"
     },
     {
+      "target_repo": "arcforgelabs/flow",
+      "display_name": "Flow",
+      "checkout_dir": "flow",
+      "prompt_note": "Use the Flow source tree and current default branch. It is job management and invoicing for labs that make work to order, with its own PostgreSQL database and integrations behind one port. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. The repository is public: flag any customer, practice, person or patient name or record in a change. Review only: keep every issue and pull request open for maintainer triage.",
+      "apply_close_rules": {
+        "issue": [],
+        "pull_request": []
+      },
+      "package_manager": "npm"
+    },
+    {
       "target_repo": "arcforgelabs/themes",
       "display_name": "Arc Forge Themes",
       "checkout_dir": "themes",
