@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
-import test, { type TestContext } from "node:test";
+import test, { after, before, type TestContext } from "node:test";
 import { parse } from "yaml";
 
 import {
@@ -29,6 +29,16 @@ import {
 } from "../dist/clawsweeper-record-metadata.js";
 import { tmpPrefix, withMockGh, withReviewRecord, workPlanCandidateReport } from "./helpers.ts";
 import { readAllSpooledActionEvents } from "../dist/action-ledger.js";
+
+// The mocks answer for the upstream control repository; a fork's CI sets its own.
+const previousGithubRepository = process.env.GITHUB_REPOSITORY;
+before(() => {
+  process.env.GITHUB_REPOSITORY = "openclaw/clawsweeper";
+});
+after(() => {
+  if (previousGithubRepository === undefined) delete process.env.GITHUB_REPOSITORY;
+  else process.env.GITHUB_REPOSITORY = previousGithubRepository;
+});
 
 function failedReviewReport(overrides = {}) {
   return `${workPlanCandidateReport({
