@@ -25,6 +25,56 @@ test("PR reference parsing follows the explicit repository without retaining pri
   }
 });
 
+test("pull request lists keep the shared relationship for each reference", () => {
+  for (const references of [
+    "#400, #401 and #402",
+    "#400; #401; and #402",
+    "openclaw/openclaw#400 and #401",
+  ]) {
+    const expected = `Superseded by ${references}`;
+    for (const number of [400, 401]) {
+      assert.deepEqual(
+        linkedPullRequestSignalContextsFromText("openclaw/openclaw", `${expected}.`, 357, number),
+        [expected],
+      );
+    }
+  }
+});
+
+test("pull request relationships stop before an independent clause", () => {
+  for (const separator of [", while", ";", " and", " but"]) {
+    const text = `Superseded by #400${separator} #401 keeps a different approach.`;
+    assert.deepEqual(linkedPullRequestSignalContextsFromText("openclaw/openclaw", text, 357, 400), [
+      "Superseded by #400",
+    ]);
+    assert.deepEqual(linkedPullRequestSignalContextsFromText("openclaw/openclaw", text, 357, 401), [
+      "#401 keeps a different approach",
+    ]);
+  }
+});
+
+test("same-repository Markdown links use the destination number within a shared list", () => {
+  const text =
+    "Superseded by #400 and [replacement #999](https://github.com/openclaw/openclaw/pull/401).";
+  for (const number of [400, 401]) {
+    const contexts = linkedPullRequestSignalContextsFromText(
+      "openclaw/openclaw",
+      text,
+      357,
+      number,
+    );
+    assert.equal(contexts.length, 1);
+    assert.match(contexts[0]!, /^Superseded by #400 and /);
+    assert.match(contexts[0]!, /replacement/);
+    assert.match(contexts[0]!, /https:\/\/github\.com\/openclaw\/openclaw\/pull\/401$/);
+    assert.doesNotMatch(contexts[0]!, /#999/);
+  }
+  assert.deepEqual(
+    linkedPullRequestSignalContextsFromText("openclaw/openclaw", text, 357, 999),
+    [],
+  );
+});
+
 test("apply-decisions ignores bare refs inside cross-repo markdown link labels for duplicate proof", () => {
   withApplyTestWorkspace(tmpPrefix, ({ root, itemsDir, closedDir, plansDir, reportPath }) => {
     const proofLogPath = join(root, "proof.log");
