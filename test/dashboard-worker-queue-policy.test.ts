@@ -1803,7 +1803,17 @@ function activeItemQueueHarness(env: Record<string, string> = {}) {
       return jsonResponse({ state: "open" });
     }
     if (/^\/repos\/openclaw\/openclaw\/pulls\/\d+$/.test(url.pathname)) {
-      return jsonResponse({ state: "open", head: { sha: live.headSha } });
+      return jsonResponse({
+        state: "open",
+        head: { sha: live.headSha },
+        base: { sha: "b".repeat(40) },
+        title: "Active-item fixture",
+        body: "",
+        locked: false,
+        labels: [],
+        draft: false,
+        updated_at: new Date(Date.now()).toISOString(),
+      });
     }
     if (url.pathname === "/repos/openclaw/clawsweeper/dispatches") {
       dispatched.push(JSON.parse(String(init?.body)));
@@ -1818,6 +1828,7 @@ function activeItemQueueHarness(env: Record<string, string> = {}) {
       CLAWSWEEPER_APP_PRIVATE_KEY: privateKey,
       EXACT_REVIEW_DISPATCH_DEBOUNCE_MS: "90000",
       EXACT_REVIEW_DISPATCH_DEBOUNCE_MAX_MS: "180000",
+      EXACT_REVIEW_INITIAL_PR_QUIET_MS: "0",
       ...env,
     },
   );
@@ -3091,10 +3102,16 @@ test("explicit pull request commands queue behind a dispatching authoritative re
   assert.deepEqual(await storage.get("exact-review-queue"), afterCommand);
 });
 
-test("explicit pull request commands survive an active authoritative lease completion", async () => {
+test("explicit pull request commands survive an active authoritative lease completion", async (t) => {
+  const starts: Array<Record<string, unknown>> = [];
+  t.mock.method(console, "info", (_message: string, fact: Record<string, unknown>) => {
+    if (fact.event === "committed_start_acknowledgement") starts.push(fact);
+  });
   const storage = new MemoryDurableStorage();
   const currentHeadSha = "c".repeat(40);
   const item = leasedExactReviewQueueItem(760, "7600");
+  item.reviewBudgetChargeGeneration = 1;
+  item.admissionDeliveryId = "original-delivery-leased-760";
   item.decision = {
     ...item.decision,
     itemKind: "pull_request",
@@ -3160,6 +3177,19 @@ test("explicit pull request commands survive an active authoritative lease compl
   assert.equal(redelivery.status, 202);
   assert.equal((await redelivery.json()).deduped, true);
   assert.deepEqual(await storage.get("exact-review-queue"), afterCommand);
+
+  const started = await startReviewGeneration(queue, item, "7600", 1, {
+    source_head_sha: currentHeadSha,
+  });
+  assert.equal(started.status, 200);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].revision, 1);
+  assert.equal(
+    starts[0].delivery_hash,
+    null,
+    "the old lease must not acquire the successor delivery",
+  );
+  assert.equal(starts[0].source_class, "organic", "the fact describes the original lease decision");
 
   const completion = await queue.fetch(
     new Request("https://clawsweeper-exact-review-queue/complete", {
@@ -4149,6 +4179,10 @@ test("completion and reconciliation successors are charged once, when started", 
 });
 
 test("a scheduled admission prepays exactly its first started generation", async (t) => {
+  const starts: Array<Record<string, unknown>> = [];
+  t.mock.method(console, "info", (_message: string, fact: Record<string, unknown>) => {
+    if (fact.event === "committed_start_acknowledgement") starts.push(fact);
+  });
   const clock = Date.parse("2026-09-28T12:00:00Z");
   t.mock.method(Date, "now", () => clock);
   const storage = new MemoryDurableStorage();
@@ -4193,14 +4227,20 @@ test("a scheduled admission prepays exactly its first started generation", async
   assert.equal(await prepaid(), true, "a claim that exits before generation keeps the prepayment");
   assert.equal((await claimReviewLease(queue, lease, "98500", 2)).status, 200);
   assert.equal(await prepaid(), true);
+  assert.equal(starts.length, 0, "claiming prepaid work is not a start");
   assert.equal((await startReviewGeneration(queue, lease, "98500", 2)).status, 200);
   assert.equal(await balance(), 5, "the prepaid first execution is not charged again");
   assert.equal(await prepaid(), undefined, "the prepayment is consumed");
+  assert.equal(starts.length, 1, "a prepaid execution still records its start");
+  assert.equal(starts[0].claim_generation, 2);
   assert.equal((await startReviewGeneration(queue, lease, "98500", 2)).status, 200);
   assert.equal(await balance(), 5);
+  assert.equal(starts.length, 1, "a replay does not record another start");
   assert.equal((await claimReviewLease(queue, lease, "98500", 3)).status, 200);
   assert.equal((await startReviewGeneration(queue, lease, "98500", 3)).status, 200);
   assert.equal(await balance(), 4, "a later execution of the same item is charged");
+  assert.equal(starts.length, 2);
+  assert.equal(starts[1].claim_generation, 3);
 });
 
 test("generation start charges only the live lease's current claim generation", async (t) => {
@@ -4255,6 +4295,91 @@ test("generation start charges only the live lease's current claim generation", 
   assert.equal((await startReviewGeneration(queue, preRollout, "9852")).status, 200);
   assert.equal(await balance(), 5, "a lease charged at claim before rollout is not charged again");
 });
+
+test("committed start observations exclude replays, stale leases and non-review work", async (t) => {
+  const events: Array<Record<string, unknown>> = [];
+  t.mock.method(console, "info", (_message: string, fact: Record<string, unknown>) =>
+    events.push(fact),
+  );
+  const item = unclaimedExactReviewQueueItem(853);
+  const publication = {
+    ...leasedExactReviewPublicationItem(854, "98540"),
+    reviewBudgetChargeGeneration: 1,
+  };
+  const finalizer = {
+    ...leasedExactReviewQueueItem(855, "98550"),
+    reviewBudgetChargeGeneration: 1,
+    terminalFinalization: {
+      disposition: "review_completed_routed",
+      statusState: "Complete",
+      statusDetail: "done",
+    },
+  };
+  const storage = new MemoryDurableStorage();
+  await storage.put("exact-review-queue", {
+    deliveries: {},
+    items: { [item.key]: item, [publication.key]: publication, [finalizer.key]: finalizer },
+  });
+  const queue = new ExactReviewQueue({ storage }, {});
+  assert.equal((await claimReviewLease(queue, item, "98530")).status, 200);
+  assert.equal(events.length, 0, "claim is not a start acknowledgement");
+  assert.equal((await startReviewGeneration(queue, item, "98539")).status, 409);
+  assert.equal(
+    (await startReviewGeneration(queue, item, "98530", 1, { phase: "finalizing" })).status,
+    400,
+  );
+  assert.equal((await startReviewGeneration(queue, item, "98530")).status, 200);
+  assert.equal((await startReviewGeneration(queue, item, "98530")).status, 200);
+  assert.equal((await startReviewGeneration(queue, publication, "98540")).status, 200);
+  assert.equal((await startReviewGeneration(queue, finalizer, "98550")).status, 200);
+  const starts = events.filter((event) => event.event === "committed_start_acknowledgement");
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].revision, 1);
+  assert.equal(starts[0].claim_generation, 1);
+  assert.equal(starts[0].run_attempt, 1);
+  assert.match(String(starts[0].lease_hash), /^[a-f0-9]{64}$/);
+});
+
+for (const failure of ["write", "schedule", "observer"] as const) {
+  test(`committed start observation preserves ${failure} failure semantics`, async (t) => {
+    const events: unknown[] = [];
+    t.mock.method(console, "info", (...values: unknown[]) => {
+      events.push(values);
+    });
+    const item = unclaimedExactReviewQueueItem(856);
+    const storage = new MemoryDurableStorage();
+    await storage.put("exact-review-queue", { deliveries: {}, items: { [item.key]: item } });
+    const queue = new ExactReviewQueue({ storage }, {});
+    assert.equal((await claimReviewLease(queue, item, "98560")).status, 200);
+    if (failure === "write") storage.failNextSql(/INSERT INTO exact_review_queue_items/);
+    if (failure === "schedule")
+      t.mock.method(
+        queue as unknown as { scheduleNext: () => Promise<void> },
+        "scheduleNext",
+        async () => {
+          throw new Error("schedule failed");
+        },
+      );
+    if (failure === "observer")
+      t.mock.method(console, "info", () => {
+        throw new Error("observer failed");
+      });
+    if (failure === "observer") {
+      assert.equal((await startReviewGeneration(queue, item, "98560")).status, 200);
+    } else {
+      await assert.rejects(
+        startReviewGeneration(queue, item, "98560"),
+        failure === "write" ? /injected SQL failure/ : /schedule failed/,
+      );
+    }
+    assert.equal(events.length, 0);
+    const state = await storage.get("exact-review-queue");
+    assert.equal(
+      state.items[item.key].reviewBudgetChargeGeneration,
+      failure === "write" ? 1 : undefined,
+    );
+  });
+}
 
 test("an explicit hot-intake rate leaves the scheduled remainder to normal backfill", async () => {
   const wrangler = fs.readFileSync("dashboard/wrangler.toml", "utf8");
@@ -4681,4 +4806,53 @@ test("parked review inventory and mutations require the operator signature", asy
       200,
     );
   }
+});
+
+test("publication telemetry adds nullable reasons to old SQLite tables and preserves the first observation", () => {
+  const storage = new MemoryDurableStorage();
+  storage.sql.exec(`CREATE TABLE exact_review_lifecycle_telemetry_batch_v1 (
+    event_id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, canonical_target_key TEXT NOT NULL,
+    fence_key TEXT NOT NULL, revision INTEGER NOT NULL, claim_generation INTEGER NOT NULL,
+    outcome TEXT NOT NULL, observed_at INTEGER NOT NULL
+  ) STRICT`);
+  const now = Date.now();
+  storage.sql.exec(
+    `INSERT INTO exact_review_lifecycle_telemetry_batch_v1 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    "old",
+    "old",
+    "openclaw/openclaw#1",
+    "old-fence",
+    1,
+    1,
+    "permanent",
+    now,
+  );
+  const store = new ExactReviewLifecycleTelemetryStore(storage);
+  store.ensureSchemaSync();
+  const event = {
+    batchId: "batch",
+    canonicalTargetKey: "openclaw/openclaw#1",
+    fenceKey: "fence",
+    revision: 1,
+    claimGeneration: 1,
+    outcome: "permanent" as const,
+    observedAt: now,
+  };
+  store.recordBatchOutcome({ ...event, reasonCode: "invalid_artifact" });
+  store.recordBatchOutcome({ ...event, reasonCode: "unknown_failure" });
+  assert.throws(
+    () => store.recordBatchOutcome({ ...event, reasonCode: "github_rate_limit" }),
+    /invalid batch telemetry reason/,
+  );
+  const restarted = new ExactReviewLifecycleTelemetryStore(storage);
+  restarted.ensureSchemaSync();
+  assert.deepEqual(
+    Array.from(
+      storage.sql.exec(
+        "SELECT reason_code FROM exact_review_lifecycle_telemetry_batch_v1 ORDER BY event_id",
+      ),
+    ).map((row) => ({ ...row })),
+    [{ reason_code: "invalid_artifact" }, { reason_code: null }],
+  );
+  storage.sql.close();
 });

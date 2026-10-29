@@ -36,8 +36,6 @@ At a high level ClawSweeper:
 - reviews open issues and pull requests on a schedule and on exact GitHub events
 - writes one durable markdown report per item in generated state
 - syncs one marker-backed public review comment per issue or PR, edited in place
-- can request relevant Web UI or Telegram proof within an eligible OpenClaw PR
-  review and evaluate results in that same turn; see [live proof](docs/live-proof.md)
 - closes only unchanged, high-confidence, policy-allowed proposals
 - routes maintainer commands `@clawsweeper review`, `@clawsweeper re-review`,
   `@clawsweeper explain`, and `@clawsweeper stop`
@@ -48,7 +46,6 @@ At a high level ClawSweeper:
 - publishes canonical review records to the Cloudflare Worker, action ledgers
   and assets to R2, and the remaining operational state to
   `openclaw/clawsweeper-state`
-
 
 The [oversized PR close lane](docs/oversized-pr-close-policy.md) proposes closing
 pull requests above 50,000 changed lines before hydration, scanning, or model
@@ -188,13 +185,18 @@ are intentionally stricter: they review issues and PRs, but apply may close only
 PRs where current `main` already implements the proposed change with
 source-backed evidence.
 
-Maintainer-authored issues and PRs, and items labeled `maintainer`, are excluded
-from automatic reviews and scheduled sweeps. One opening/ready reminder explains
-how to opt in. Only request `@clawsweeper review` when a review is needed and the
+Maintainer-authored issues and PRs, and items labeled `maintainer`, created from
+2026-10-15 03:50 UTC are reviewed like everyone else's: a PR gets one automatic
+review and later reviews need a request; an issue follows the ordinary issue
+cadence. Older maintainer items stay excluded from automatic reviews and
+scheduled sweeps, and got one opening/ready reminder explaining how to opt in.
+Only request `@clawsweeper review` when a review is needed and the
 work and validation are complete; agents must not request reviews automatically
 or repeat requests while one is queued or running. A one-off request does not
-opt future pushes into reviews. Existing `clawsweeper:autofix` and
-`clawsweeper:automerge` labels retain their explicit opt-in behavior.
+opt future pushes into reviews, but it stays open until it is answered: if the
+item changes while it is reviewed, ClawSweeper re-reviews and still answers that
+request. The retired `clawsweeper:autofix` and `clawsweeper:automerge` labels no
+longer change review admission; they still protect an item from close proposals.
 
 ## Maintainer Commands
 
@@ -218,7 +220,6 @@ acknowledging them. Exact item work is coalesced and leased by the Worker, so a
 webhook burst does not create capacity-waiting Actions runners. Repair, autofix,
 automerge, issue implementation, fix-ci, and address-review commands are retired.
 
-
 ## Dashboard
 
 Live dashboard and generated state: https://github.com/openclaw/clawsweeper-state
@@ -240,7 +241,6 @@ requests that are blocked on real behavior proof labels, including missing
 proof, supplied-but-not-sufficient proof, mock-only proof, and proof label
 mismatches. See
 [`docs/pr-proof-triage-dashboard.md`](docs/pr-proof-triage-dashboard.md).
-
 
 The default-off unconfirmed product-direction policy can propose closure for a
 strictly bounded class of technically correct, well-proven external feature PRs
@@ -816,9 +816,14 @@ usage is documented in
 
 ```bash
 codex login --device-auth -c 'service_tier="fast"'
-pnpm run codex:local:check
+pnpm run codex:local:check -- --diagnostics
 pnpm run review -- --local-only --target-repo owner/name --item-number 123
 ```
+
+`--diagnostics` checks the selected Codex binary and its login status without a
+model request. It does not prove model access or review readiness. Omit
+`--diagnostics` to also run the existing model smoke test, which consumes model
+usage.
 
 `review` is the single issue/PR review command. `--local-only` makes it an
 advisory local run: it skips the review-start placeholder comment, defaults the
@@ -879,6 +884,21 @@ pnpm run review -- --local-range \
   --target-repo openclaw/clawsweeper \
   --base origin/main
 ```
+
+The built source checkout also provides a local-only entrypoint:
+
+```bash
+node dist/clawsweeper-local.js review --target-repo openclaw/clawsweeper --base origin/main
+node dist/clawsweeper-local.js --help
+node dist/clawsweeper-local.js --version
+```
+
+Both range commands use the same review engine, scanner, reports, history and
+output cleanup. The local entrypoint loads that engine only when review starts;
+help and version do not invoke Codex. Hosted admission, leases, action-ledger
+publication and cache metrics stay in the hosted command. This is a source
+checkout entrypoint, not an installable package. Diagnostics integration remains
+separate; `codex:local:check` still invokes its existing model smoke test.
 
 Without `--target-dir`, `--local-range` reviews the checkout where the command
 was invoked. Pass `--target-dir <path>` when invoking ClawSweeper from a
@@ -1089,7 +1109,6 @@ Required `clawsweeper` app permissions:
 - Checks: read/write on target repositories, for structural cache state and
   commit Check Run publication.
 - Commit statuses: read on target repositories, for structural cache state.
-
 
 ClawSweeper no longer falls back to PAT-based write tokens. If the GitHub App
 installation does not grant the requested permission set, the workflow fails at

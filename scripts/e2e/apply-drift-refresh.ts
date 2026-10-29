@@ -2,6 +2,7 @@
 // Controlled workflow execution only: every gh/curl call is intercepted locally.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { Console } from "node:console";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -108,7 +109,7 @@ if (process.env.LIVE_STATE === 'missing') { process.stderr.write('gh: Not Found 
 const number = Number(endpoint.split('/').at(-1));
 // Synthetic kinds: the recorded apply report does not establish issue/PR kind.
 const pr = [128515,121477].includes(number);
-process.stdout.write(args.includes('--jq') ? (pr ? 'pull_request' : 'issue') : JSON.stringify({number,state:process.env.LIVE_STATE || 'open',locked:false,...(pr ? {pull_request:{}} : {})}));
+process.stdout.write(args.includes('--jq') ? (pr ? 'pull_request' : 'issue') : JSON.stringify({number,html_url:'https://github.com/openclaw/openclaw/'+(pr ? 'pull/' : 'issues/')+number,state:process.env.LIVE_STATE || 'open',locked:false,...(pr ? {pull_request:{}} : {})}));
 `;
   for (const tool of ["gh", "curl", "pnpm"])
     fs.writeFileSync(path.join(bin, tool), proxy, { mode: 0o755 });
@@ -409,5 +410,12 @@ process.stdout.write(args.includes('--jq') ? (pr ? 'pull_request' : 'issue') : J
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(JSON.stringify(await proveApplyDriftRefresh(), null, 2));
+  const originalConsole = globalThis.console;
+  // Keep in-process Worker diagnostics separate from the CLI's JSON result.
+  globalThis.console = new Console({ stdout: process.stderr, stderr: process.stderr });
+  try {
+    process.stdout.write(`${JSON.stringify(await proveApplyDriftRefresh(), null, 2)}\n`);
+  } finally {
+    globalThis.console = originalConsole;
+  }
 }
