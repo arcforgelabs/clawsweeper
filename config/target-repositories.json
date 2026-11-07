@@ -80,10 +80,10 @@
       "package_manager": "npm"
     },
     {
-      "target_repo": "arcforgelabs/agent-marketplace",
-      "display_name": "Arc Forge Agent Marketplace",
-      "checkout_dir": "agent-marketplace",
-      "prompt_note": "Use the Arc Forge Agent Marketplace source tree and current default branch. It holds agent plugins, tools and skills maintained by Arc Forge Labs. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
+      "target_repo": "arcforgelabs/marketplace",
+      "display_name": "Arc Forge Marketplace",
+      "checkout_dir": "marketplace",
+      "prompt_note": "Use the Arc Forge Marketplace source tree and current default branch. It holds agent plugins, tools and skills maintained by Arc Forge Labs. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",
       "apply_close_rules": {
         "issue": [],
         "pull_request": []

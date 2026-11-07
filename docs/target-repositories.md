@@ -12,6 +12,18 @@ Read when enabling ClawSweeper for another OpenClaw repository, changing
 `config/target-repositories.json`, or debugging `Unsupported target repo`
 failures.
 
+The Arc Forge deployment is restricted to five verified-public, review-only
+targets: `arcforgelabs/marketplace`, `arcforgelabs/dictate`,
+`arcforgelabs/field`, `arcforgelabs/flow`, and `arcforgelabs/themes`.
+The marketplace repository was renamed from `agent-marketplace`; GitHub
+redirects the old URL, but exact admission and webhook identities require the
+canonical name. Keep its profile, `TARGET_REPOS` and `PUBLIC_BAY_REPOS` in
+`dashboard/wrangler.arcforge.toml` aligned. Repository ID 1344610702 and public
+visibility were verified on 7 November 2026. This configuration repair does not
+itself deploy the Worker or prove a new event-to-result review. Worker activation
+belongs to the existing prod-forge-gateway deployment owner; no private target
+or close permission is added.
+
 ClawSweeper has two target-repository paths:
 
 - configured runtime profiles in `config/target-repositories.json`
