@@ -92,6 +92,7 @@
     },
     {
       "target_repo": "arcforgelabs/dictate",
+      "hosted_admission": false,
       "display_name": "Dictate",
       "checkout_dir": "dictate",
       "prompt_note": "Use the Dictate source tree and current default branch. It is a local-only desktop dictation app for Linux and Windows with on-device speech-to-text; Python is the main runtime and npm packages the installer. Read its VISION.md and AGENTS.md before judging scope, and verify claims against the checked-out code. Review only: keep every issue and pull request open for maintainer triage.",

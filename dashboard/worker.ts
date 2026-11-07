@@ -1048,6 +1048,8 @@ export default {
         url.pathname.slice("/internal/state".length),
         canonicalRecordPath[1] === "items",
       );
+    if (url.pathname === "/internal/exact-review/target-census" && request.method === "POST")
+      return authenticatedExactReviewQueueRequest(request, env, "/target-census");
     if (url.pathname === "/internal/exact-review/storage-stats" && request.method === "POST")
       return authenticatedExactReviewQueueRequest(request, env, "/storage/stats");
     if (url.pathname === "/internal/state/records/slugs" && request.method === "POST")
@@ -3914,6 +3916,7 @@ async function githubWebhook(request, env, ctx) {
 async function workerHostedTargetEligibility(
   env: DashboardEnv,
   targetRepo: string,
+  continuation = false,
 ): Promise<HostedTargetEligibility> {
   const configuredRepositories = Array.isArray(env.hostedTargetConfiguredRepositories)
     ? env.hostedTargetConfiguredRepositories.filter(
@@ -3922,6 +3925,7 @@ async function workerHostedTargetEligibility(
     : undefined;
   return resolveHostedTargetEligibility(targetRepo, fetch, {
     ...hostedTargetRegistryUrlOption(env),
+    continuation,
     ...(configuredRepositories ? { configuredRepositories } : {}),
     ...(typeof env.hostedTargetPredicate === "function"
       ? {
@@ -5623,7 +5627,10 @@ async function hostedTargetQueueRequest(env, path: string, body: string) {
     objectValue(objectValue(parseJsonObject(body)).decision).targetRepo || "",
   ).trim();
   if (/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(targetRepo)) {
-    const eligibility = await workerHostedTargetEligibility(env, targetRepo);
+    const decision = objectValue(objectValue(parseJsonObject(body)).decision);
+    const continuation =
+      path === "/enqueue" && decision.sourceAction === "exact_review_artifact_publish";
+    const eligibility = await workerHostedTargetEligibility(env, targetRepo, continuation);
     if (eligibility.outcome === "terminal") {
       return hostedTargetProbeResponse({ outcome: "terminal" });
     }
