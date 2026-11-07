@@ -1,0 +1,1 @@
+- Retire Dictate from Arc Forge hosted review admission before its personal Linux-only ownership cutover; preserve historical records and unrelated targets.

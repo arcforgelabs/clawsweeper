@@ -1,0 +1,1 @@
+- Fix Arc Forge marketplace review admission after the repository rename without adding targets or close authority.

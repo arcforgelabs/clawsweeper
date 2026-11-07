@@ -12,6 +12,18 @@ Read when enabling ClawSweeper for another OpenClaw repository, changing
 `config/target-repositories.json`, or debugging `Unsupported target repo`
 failures.
 
+The Arc Forge deployment is restricted to four verified-public, review-only
+targets: `arcforgelabs/marketplace`, `arcforgelabs/field`,
+`arcforgelabs/flow`, and `arcforgelabs/themes`.
+The marketplace repository was renamed from `agent-marketplace`; GitHub
+redirects the old URL, but exact admission and webhook identities require the
+canonical name. Keep its profile, `TARGET_REPOS` and `PUBLIC_BAY_REPOS` in
+`dashboard/wrangler.arcforge.toml` aligned. Repository ID 1344610702 and public
+visibility were verified on 7 November 2026. This configuration repair does not
+itself deploy the Worker or prove a new event-to-result review. Worker activation
+belongs to the existing prod-forge-gateway deployment owner; no private target
+or close permission is added.
+
 ClawSweeper has two target-repository paths:
 
 - configured runtime profiles in `config/target-repositories.json`
@@ -197,3 +209,14 @@ If a target dispatch reaches ClawSweeper but receiver token creation fails, the
 App is usually not installed on that target repo. If the target workflow skips
 before dispatch, the target repo usually cannot access
 `CLAWSWEEPER_APP_PRIVATE_KEY`.
+
+### Dictate personal Linux cutover
+
+Dictate is retired from the Arc Forge hosted registry and Worker target/Bay lists.
+Neither old `arcforgelabs/dictate` nor personal `IAMSamuelRodda/dictate` is enrolled;
+no generic owner fallback is added. Historical records remain intact. Before merging
+this profile removal, the existing operator must stop new Dictate intake through
+the admitted live route and drain queued/claimed review and publication work while
+the old runtime profile remains available. Only after target-scoped zero-work
+readback may this removal land and be deployed before repository transfer. Removing
+public dashboard visibility is not a drain receipt.
