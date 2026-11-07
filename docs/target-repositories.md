@@ -214,7 +214,9 @@ before dispatch, the target repo usually cannot access
 
 Dictate is retired from the Arc Forge hosted registry and Worker target/Bay lists.
 Neither old `arcforgelabs/dictate` nor personal `IAMSamuelRodda/dictate` is enrolled;
-no generic owner fallback is added. Historical records remain intact. Deploy this
-configuration through the existing operator, stop new target admission, then drain
-all queued/claimed review and publication work before repository transfer. Source
-removal is not a live drain receipt.
+no generic owner fallback is added. Historical records remain intact. Before merging
+this profile removal, the existing operator must stop new Dictate intake through
+the admitted live route and drain queued/claimed review and publication work while
+the old runtime profile remains available. Only after target-scoped zero-work
+readback may this removal land and be deployed before repository transfer. Removing
+public dashboard visibility is not a drain receipt.
