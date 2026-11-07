@@ -1796,7 +1796,8 @@ export class ExactReviewQueue {
         decision.targetRepo,
         hostedTargetMetadataToken,
         this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
-        !decision.publication,
+        true,
+        Boolean(decision.publication),
       );
       if (admission.outcome !== "public") return hostedTargetProbeResponse(admission);
 
@@ -9725,6 +9726,7 @@ export class ExactReviewQueue {
     eligibilityPrepared = false,
     // Credential-bearing paths must probe live; only intake can consume the cache.
     intake = false,
+    continuation = !intake,
   ): Promise<HostedTargetAdmission> {
     const normalizedRepo = targetRepo.trim().toLowerCase();
     const cacheKey = `hosted-target-admission:${normalizedRepo}`;
@@ -9748,7 +9750,7 @@ export class ExactReviewQueue {
       this.storage.kv.put(revocationKey, { at: Date.now(), token: crypto.randomUUID() });
     };
     if (!eligibilityPrepared) {
-      const eligibility = await this.hostedTargetEligibility(targetRepo, !intake);
+      const eligibility = await this.hostedTargetEligibility(targetRepo, continuation);
       if (eligibility.outcome !== "eligible") {
         if (eligibility.outcome === "terminal") revoke();
         return eligibility.outcome === "terminal"
