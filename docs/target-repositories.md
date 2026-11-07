@@ -12,9 +12,9 @@ Read when enabling ClawSweeper for another OpenClaw repository, changing
 `config/target-repositories.json`, or debugging `Unsupported target repo`
 failures.
 
-The Arc Forge deployment is restricted to five verified-public, review-only
-targets: `arcforgelabs/marketplace`, `arcforgelabs/dictate`,
-`arcforgelabs/field`, `arcforgelabs/flow`, and `arcforgelabs/themes`.
+The Arc Forge deployment is restricted to four verified-public, review-only
+targets: `arcforgelabs/marketplace`, `arcforgelabs/field`,
+`arcforgelabs/flow`, and `arcforgelabs/themes`.
 The marketplace repository was renamed from `agent-marketplace`; GitHub
 redirects the old URL, but exact admission and webhook identities require the
 canonical name. Keep its profile, `TARGET_REPOS` and `PUBLIC_BAY_REPOS` in
