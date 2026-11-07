@@ -1,0 +1,1 @@
+- Allow hosted intake retirement without deleting runtime profiles, and expose a signed, read-only canonical target queue census before transfer.

@@ -417,3 +417,36 @@ test("privileged sweep, audit, and router jobs need a public hosted admission", 
     CLAWSWEEPER_APP_PRIVATE_KEY: "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
   });
 });
+
+test("admission-only retirement retains runtime profiles and unrelated admission", async () => {
+  const registry = JSON.parse(readFileSync("config/target-repositories.json", "utf8"));
+  const target = registry.repositories.find(
+    (entry: { target_repo: string }) => entry.target_repo === "arcforgelabs/dictate",
+  );
+  target.hosted_admission = false;
+  const reader: typeof fetch = async () => Response.json(registry);
+  assert.deepEqual(await resolveHostedTargetEligibility("arcforgelabs/dictate", reader), {
+    outcome: "terminal",
+  });
+  assert.deepEqual(
+    await resolveHostedTargetEligibility("arcforgelabs/dictate", reader, { continuation: true }),
+    { outcome: "eligible" },
+  );
+  assert.deepEqual(await resolveHostedTargetEligibility("IAMSamuelRodda/dictate", reader), {
+    outcome: "terminal",
+  });
+  assert.deepEqual(await resolveHostedTargetEligibility("arcforgelabs/field", reader), {
+    outcome: "eligible",
+  });
+  const child = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      'import { repositoryProfileFor } from "./dist/repository-profiles.js"; console.log(repositoryProfileFor("arcforgelabs/dictate").targetRepo)',
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(child.status, 0, child.stderr);
+  assert.equal(child.stdout.trim(), "arcforgelabs/dictate");
+});

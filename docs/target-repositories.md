@@ -197,3 +197,28 @@ If a target dispatch reaches ClawSweeper but receiver token creation fails, the
 App is usually not installed on that target repo. If the target workflow skips
 before dispatch, the target repo usually cannot access
 `CLAWSWEEPER_APP_PRIVATE_KEY`.
+
+### Stop intake before removing a profile
+
+A configured profile may set `hosted_admission: false` to reject new hosted
+intake while retaining its runtime profile for accepted work. Omitted means
+admitted. Dictate uses this before its personal transfer; do not merge the
+separate profile removal until existing work has drained. Other profiles and
+Worker target/Bay lists are unchanged in this phase.
+
+The existing webhook-signed operator transport supports POST
+`/internal/exact-review/target-census` with `{"target_repo":"arcforgelabs/dictate"}`.
+It reads canonical queue rows (all pending, dispatching, leased and parked
+review/publication/finalization states), unfinished batch membership, open dead
+letters and pending source/branch authority reservations. It never expires,
+replays, initializes or deletes state. Missing schema or invalid state returns
+503/incomplete, never an empty success. No identities or payloads leave this
+internal endpoint beyond the requested repository and counts; Bay is unchanged.
+
+Activation still requires the reviewed Worker version to expose this operation
+and use the fork registry. Sign through existing GHA-held custody; never export
+keys or use the upstream default URL. Verify admission-off and complete zero-work
+receipts twice, a normal cron interval apart, plus GitHub runner/artifact owner
+reconciliation before removing the profile or transferring. A zero canonical
+snapshot is point-in-time evidence, not proof that an untracked external process
+has stopped. This source change deploys nothing and creates no grants.

@@ -68,6 +68,7 @@ export async function resolveHostedTargetEligibility(
     configuredRepositories?: Iterable<string>;
     predicate?: (targetRepo: string) => boolean | Promise<boolean>;
     registryUrl?: string;
+    continuation?: boolean;
   } = {},
 ): Promise<HostedTargetEligibility> {
   const normalized = normalizeTargetRepo(targetRepo);
@@ -111,7 +112,7 @@ export async function resolveHostedTargetEligibility(
     } catch {
       return { outcome: "retryable" };
     }
-    const policy = hostedTargetPolicyFromRegistry(parsed);
+    const policy = hostedTargetPolicyFromRegistry(parsed, options.continuation);
     if (!policy) return { outcome: "retryable" };
     return isHostedTargetEligible(normalized, policy)
       ? { outcome: "eligible" }
@@ -121,7 +122,10 @@ export async function resolveHostedTargetEligibility(
   }
 }
 
-export function hostedTargetPolicyFromRegistry(value: unknown): HostedTargetPolicy | null {
+export function hostedTargetPolicyFromRegistry(
+  value: unknown,
+  continuation = false,
+): HostedTargetPolicy | null {
   const config = objectValue(value);
   if (config.schema_version !== 1 && config.schema_version !== 2) return null;
   if (!Array.isArray(config.repositories)) return null;
@@ -129,7 +133,9 @@ export function hostedTargetPolicyFromRegistry(value: unknown): HostedTargetPoli
   for (const value of config.repositories) {
     const targetRepo = normalizeTargetRepo(stringValue(objectValue(value).target_repo));
     if (!targetRepo) return null;
-    repositories.push(targetRepo);
+    const admission = objectValue(value).hosted_admission;
+    if (admission !== undefined && typeof admission !== "boolean") return null;
+    if (continuation || admission !== false) repositories.push(targetRepo);
   }
   const fallbackValues = Array.isArray(config.generic_fallbacks)
     ? config.generic_fallbacks

@@ -1114,6 +1114,9 @@ export class ExactReviewQueue {
     hostedTargetMetadataToken: HostedTargetMetadataToken,
   ) {
     const url = new URL(request.url);
+    if (request.method === "POST" && url.pathname === "/target-census") {
+      return this.targetCensus(await request.json().catch(() => null));
+    }
     if (request.method === "POST" && url.pathname === "/lifecycle-audit/inventory") {
       return this.readLifecycleAuditInventory(await request.json().catch(() => null));
     }
@@ -1794,6 +1797,7 @@ export class ExactReviewQueue {
         hostedTargetMetadataToken,
         this.hasPreparedHostedTargetEligibility(request, decision.targetRepo),
         true,
+        Boolean(decision.publication),
       );
       if (admission.outcome !== "public") return hostedTargetProbeResponse(admission);
 
@@ -9722,6 +9726,7 @@ export class ExactReviewQueue {
     eligibilityPrepared = false,
     // Credential-bearing paths must probe live; only intake can consume the cache.
     intake = false,
+    continuation = !intake,
   ): Promise<HostedTargetAdmission> {
     const normalizedRepo = targetRepo.trim().toLowerCase();
     const cacheKey = `hosted-target-admission:${normalizedRepo}`;
@@ -9745,7 +9750,7 @@ export class ExactReviewQueue {
       this.storage.kv.put(revocationKey, { at: Date.now(), token: crypto.randomUUID() });
     };
     if (!eligibilityPrepared) {
-      const eligibility = await this.hostedTargetEligibility(targetRepo);
+      const eligibility = await this.hostedTargetEligibility(targetRepo, continuation);
       if (eligibility.outcome !== "eligible") {
         if (eligibility.outcome === "terminal") revoke();
         return eligibility.outcome === "terminal"
@@ -9813,7 +9818,10 @@ export class ExactReviewQueue {
     return admission;
   }
 
-  private async hostedTargetEligibility(targetRepo: string): Promise<HostedTargetEligibility> {
+  private async hostedTargetEligibility(
+    targetRepo: string,
+    continuation = false,
+  ): Promise<HostedTargetEligibility> {
     const configuredRepositories = Array.isArray(this.env.hostedTargetConfiguredRepositories)
       ? this.env.hostedTargetConfiguredRepositories.filter(
           (value): value is string => typeof value === "string",
@@ -9821,6 +9829,7 @@ export class ExactReviewQueue {
       : undefined;
     return resolveHostedTargetEligibility(targetRepo, (input, init) => fetch(input, init), {
       ...hostedTargetRegistryUrlOption(this.env),
+      continuation,
       ...(configuredRepositories ? { configuredRepositories } : {}),
       ...(typeof this.env.hostedTargetPredicate === "function"
         ? {
@@ -11852,6 +11861,99 @@ export class ExactReviewQueue {
              ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`,
         );
       }
+    }
+  }
+
+  // SELECT-only: no initialization, expiry, alarms or sampled projection.
+  private async targetCensus(input: unknown) {
+    const target = String(objectValue(input).target_repo || "")
+      .trim()
+      .toLowerCase();
+    if (!/^[a-z0-9_.-]+\/[a-z0-9_.-]+$/.test(target))
+      return json({ error: "invalid_target_repo" }, 400);
+    try {
+      if (
+        Number(this.readStorageMetaSync()?.schema_version) !==
+        EXACT_REVIEW_QUEUE_STORAGE_SCHEMA_VERSION
+      )
+        return json({ error: "census_storage_unavailable" }, 503);
+      let pendingAuthorities = 0;
+      for (const prefix of [
+        EXACT_REVIEW_SOURCE_AUTHORITY_RESERVATION_PREFIX,
+        EXACT_REVIEW_BRANCH_AUTHORITY_RESERVATION_PREFIX,
+      ]) {
+        const reservations = await this.storage.list({ prefix });
+        for (const value of reservations.values()) {
+          const decision = objectValue(objectValue(value).decision);
+          if (typeof decision.targetRepo !== "string") throw new Error("invalid_census_authority");
+          if (decision.targetRepo.toLowerCase() === target) pendingAuthorities++;
+        }
+      }
+      let pendingCommands = 0;
+      for (const row of this.storage.sql.exec(
+        "SELECT record_json FROM exact_review_command_intakes",
+      )) {
+        const record = objectValue(JSON.parse(String(row.record_json)));
+        const repo = objectValue(objectValue(record.intake).decision).targetRepo;
+        if (typeof repo !== "string") throw new Error("invalid_census_command");
+        if (repo.toLowerCase() === target) pendingCommands++;
+      }
+      const empty = () => ({ pending: 0, dispatching: 0, leased: 0, parked: 0 });
+      const items = { review: empty(), publication: empty(), finalization: empty() };
+      let total = 0;
+      for (const row of this.storage.sql.exec(
+        "SELECT item_key, item_json FROM " + EXACT_REVIEW_QUEUE_ITEM_TABLE,
+      )) {
+        const item = JSON.parse(String(row.item_json)) as ExactReviewQueueItem;
+        if (!item || item.key !== row.item_key || !item.decision?.targetRepo)
+          throw new Error("invalid_census_item");
+        if (item.decision.targetRepo.toLowerCase() !== target) continue;
+        const lane = item.terminalFinalization ? "finalization" : exactReviewQueueLane(item);
+        if (!Object.hasOwn(items[lane], item.state)) throw new Error("invalid_census_state");
+        items[lane][item.state]++;
+        total++;
+      }
+      // Unfinished membership owns work even after expiry or disappearance of the mutable row.
+      let unfinishedBatchItems = 0;
+      for (const row of this.storage.sql.exec(
+        "SELECT item_key FROM exact_review_publication_batch_items WHERE terminal_outcome IS NULL",
+      )) {
+        if (String(row.item_key).split("#")[0].toLowerCase() === target) unfinishedBatchItems++;
+      }
+      const openDeadLetters = Number(
+        objectValue(
+          Array.from(
+            this.storage.sql.exec(
+              "SELECT count(*) AS n FROM " +
+                EXACT_REVIEW_QUEUE_DEAD_LETTER_TABLE +
+                " WHERE lower(target_repo) = ? AND status = 'open'",
+              target,
+            ),
+          )[0],
+        ).n,
+      );
+      return json({
+        schema_version: 1,
+        target_repo: target,
+        generated_at: new Date().toISOString(),
+        collection: { state: "complete" },
+        items,
+        pending_authorities: pendingAuthorities,
+        pending_commands: pendingCommands,
+        unfinished_batch_items: unfinishedBatchItems,
+        open_dead_letters: openDeadLetters,
+        drained:
+          total === 0 &&
+          pendingAuthorities === 0 &&
+          pendingCommands === 0 &&
+          unfinishedBatchItems === 0 &&
+          openDeadLetters === 0,
+      });
+    } catch {
+      return json(
+        { error: "census_storage_unavailable", collection: { state: "incomplete" } },
+        503,
+      );
     }
   }
 
