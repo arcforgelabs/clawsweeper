@@ -209,3 +209,12 @@ If a target dispatch reaches ClawSweeper but receiver token creation fails, the
 App is usually not installed on that target repo. If the target workflow skips
 before dispatch, the target repo usually cannot access
 `CLAWSWEEPER_APP_PRIVATE_KEY`.
+
+### Dictate personal Linux cutover
+
+Dictate is retired from the Arc Forge hosted registry and Worker target/Bay lists.
+Neither old `arcforgelabs/dictate` nor personal `IAMSamuelRodda/dictate` is enrolled;
+no generic owner fallback is added. Historical records remain intact. Deploy this
+configuration through the existing operator, stop new target admission, then drain
+all queued/claimed review and publication work before repository transfer. Source
+removal is not a live drain receipt.
