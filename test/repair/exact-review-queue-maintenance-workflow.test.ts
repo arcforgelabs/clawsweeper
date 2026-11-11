@@ -11,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:https";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
@@ -49,11 +50,26 @@ test("queue maintenance is explicit, bounded, and non-cancelling", () => {
     "execute",
     "passes",
     "max_items",
+    "storage_table",
+    "storage_cursor",
+    "storage_max_pages",
     "producer_run_id",
     "artifact_id",
     "publication_key_sha256",
     "queue_revision",
     "reviewed_plan_sha256",
+    "canonical_action",
+    "previous_plan_sha256",
+    "expected_deployment_sha",
+    "canonical_attestation_json",
+    "canonical_verification_phase",
+    "canonical_verification_repo_slug",
+    "canonical_verification_baseline_json",
+    "canonical_verification_baseline_sha256",
+    "usage_deploy_sha",
+    "usage_version_id",
+    "usage_canary_run_id",
+    "authorize_usage_canary",
   ]);
   assert.deepEqual(workflow.on.workflow_dispatch.inputs.max_items, {
     description: "Maximum reconciliation candidates to inspect",
@@ -74,6 +90,156 @@ test("queue maintenance is explicit, bounded, and non-cancelling", () => {
   assert.match(run, /--max-items "\$MAX_ITEMS"/);
   assert.match(run, /args\+=\(--apply\)/);
   assert.match(run, /--passes "\$PASSES"/);
+});
+
+test("canonical verification is isolated to explicit main-branch dispatch without Cloudflare credentials", () => {
+  const job = workflow.jobs["canonical-records-verify"]!;
+  assert.match(job.if!, /github.repository == 'openclaw\/clawsweeper'/);
+  assert.match(job.if!, /github.ref == 'refs\/heads\/main'/);
+  assert.match(job.if!, /inputs.mode == 'canonical-records-verify'/);
+  assert.equal(job.env, undefined);
+  assert.equal(job.steps[0]?.with?.ref, "${{ github.sha }}");
+  assert.equal(job.steps[0]?.with?.["persist-credentials"], false);
+  const step = job.steps.at(-1)!;
+  assert.equal(step.run, "node scripts/canonical-record-verification.ts");
+  assert.equal(step.env?.CLAWSWEEPER_WEBHOOK_SECRET, "${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}");
+  assert.equal(step.env?.VERIFICATION_EXECUTE, "${{ inputs.execute }}");
+  assert.equal(
+    step.env?.VERIFICATION_BASELINE,
+    "${{ inputs.canonical_verification_baseline_json }}",
+  );
+  assert.equal(step.env?.EXPECTED_DEPLOYMENT_SHA, "${{ inputs.expected_deployment_sha }}");
+  assert.equal(
+    step.env?.EXPECTED_BASELINE_SHA256,
+    "${{ inputs.canonical_verification_baseline_sha256 }}",
+  );
+  assert.equal(step.env?.CLOUDFLARE_API_TOKEN, undefined);
+  assert.ok(job.steps.every((entry) => !entry.run?.includes("${{")));
+});
+
+test("read-model compression requires explicit main dispatch and only its HMAC credential", () => {
+  const job = workflow.jobs["read-model-compression"]!;
+  assert.match(job.if!, /inputs.mode == 'read-model-compression'/);
+  assert.match(job.if!, /github.ref == 'refs\/heads\/main'/);
+  assert.equal(job.steps[0]?.with?.["persist-credentials"], false);
+  assert.equal(job.env, undefined);
+  const step = job.steps.at(-1)!;
+  assert.equal(step.env?.CLOUDFLARE_API_TOKEN, undefined);
+  assert.match(step.run!, /--reviewed-plan-sha256 "\$REVIEWED_PLAN_SHA256"/);
+  assert.ok(job.steps.every((entry) => !entry.run?.includes("${{")));
+});
+
+test("storage stats workflow accepts current payloads and rejects failures", async (t) => {
+  const job = workflow.jobs["storage-stats"]!;
+  assert.equal(job.if, "${{ inputs.mode == 'storage-stats' }}");
+  const step = job.steps.find((candidate) => candidate.name === "Report queue storage by table")!;
+  const current = {
+    ok: true,
+    generated_at: "2026-01-02T03:04:05.678Z",
+    storage: {
+      databaseBytes: 4096,
+      estimatedTableBytes: 60,
+      tables: [
+        {
+          table: "synthetic_records",
+          rows: 2,
+          sampledRows: 2,
+          averageRowBytes: 30,
+          estimatedBytes: 60,
+        },
+      ],
+    },
+  };
+  const cases: {
+    name: string;
+    body?: unknown;
+    raw?: string;
+    status?: number;
+    expectedSummary?: string;
+  }[] = [
+    {
+      name: "current response without retired telemetry",
+      body: current,
+      expectedSummary: "| synthetic_records | 2 | 30 | 60 |",
+    },
+    {
+      name: "unknown database size and empty tables",
+      body: { ...current, storage: { databaseBytes: null, estimatedTableBytes: 0, tables: [] } },
+      expectedSummary: "database: unknown bytes",
+    },
+    { name: "failed diagnostics", body: { ...current, ok: false } },
+    { name: "missing storage", body: { ok: true, generated_at: current.generated_at } },
+    { name: "missing generation time", body: { ok: true, storage: current.storage } },
+    {
+      name: "unusable table rows",
+      body: { ...current, storage: { ...current.storage, tables: [{}] } },
+    },
+    { name: "malformed JSON", raw: "{" },
+    { name: "HTTP failure", body: { error: "synthetic_failure" }, status: 503 },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      const directory = mkdtempSync(join(tmpdir(), "clawsweeper-storage-summary-"));
+      t.after(() => rmSync(directory, { recursive: true, force: true }));
+      const summaryPath = join(directory, "summary.md");
+      writeFileSync(summaryPath, "");
+      const responseBody = scenario.raw ?? JSON.stringify(scenario.body);
+      assert.equal(typeof responseBody, "string");
+      const requests: { method?: string; path?: string; body: string; signature?: string }[] = [];
+      const secret = "synthetic-storage-secret";
+      const server = createHttpServer(async (request, response) => {
+        let body = "";
+        for await (const chunk of request) body += chunk;
+        requests.push({
+          method: request.method,
+          path: request.url,
+          body,
+          signature: request.headers["x-clawsweeper-exact-review-signature"] as string | undefined,
+        });
+        response.writeHead(scenario.status ?? 200, { "content-type": "application/json" });
+        response.end(responseBody);
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+      const endpoint = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}`;
+      let exitCode = 0;
+      try {
+        await promisify(execFile)("bash", ["-c", step.run!], {
+          cwd: directory,
+          timeout: 10_000,
+          env: {
+            PATH: process.env.PATH,
+            CLAWSWEEPER_WEBHOOK_SECRET: secret,
+            EXACT_REVIEW_QUEUE_URL: endpoint,
+            GITHUB_STEP_SUMMARY: summaryPath,
+          },
+        });
+      } catch (error) {
+        assert.equal(typeof (error as { code: unknown }).code, "number");
+        exitCode = (error as { code: number }).code;
+      }
+      assert.deepEqual(requests, [
+        {
+          method: "POST",
+          path: "/internal/exact-review/storage-stats",
+          body: "{}",
+          signature: `sha256=${createHmac("sha256", secret).update("{}").digest("hex")}`,
+        },
+      ]);
+      assert.equal(readFileSync(join(directory, "stats.json"), "utf8"), responseBody);
+      const summary = readFileSync(summaryPath, "utf8");
+      if (scenario.expectedSummary) {
+        assert.equal(exitCode, 0);
+        assert.match(summary, /Generated: 2026-01-02T03:04:05\.678Z/);
+        assert.match(summary, /sampled column lengths; indexes and SQLite overhead are excluded/);
+        assert.doesNotMatch(summary, /tide source scans/);
+        assert.ok(summary.includes(scenario.expectedSummary));
+      } else {
+        assert.notEqual(exitCode, 0);
+        assert.equal(summary, "");
+      }
+    });
+  }
 });
 
 test("retirement workflow executes isolated preview and apply argument routes", async (t) => {
@@ -208,9 +374,116 @@ test("maintenance CLI signs one HTTPS dry run, redacts identities, and refuses r
   let redirect = false;
   let retirementCalls = 0;
   let retirementMode = "success";
+  let canonicalCalls = 0;
+  let canonicalMode = "success";
+  let compressionCalls = 0;
+  let compressionFailure = false;
   const server = createServer(
     { key: readFileSync(key), cert: readFileSync(cert) },
     async (request, response) => {
+      if (request.url === "/internal/exact-review/read-model/compression") {
+        let body = "";
+        for await (const chunk of request) body += chunk;
+        compressionCalls++;
+        assert.equal(
+          request.headers["x-clawsweeper-exact-review-signature"],
+          `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`,
+        );
+        assert.deepEqual(JSON.parse(body), {
+          action: "migrate",
+          execute: true,
+          expectedDeploymentSha: "e".repeat(40),
+          reviewedPreviewSha256: "f".repeat(64),
+        });
+        response.setHeader("content-type", "application/json");
+        if (compressionFailure && compressionCalls === 2) {
+          response
+            .writeHead(500)
+            .end(JSON.stringify({ error: "private_marker", message: "private-response-sentinel" }));
+        } else
+          response.end(
+            JSON.stringify({
+              ok: true,
+              checkpoint: {
+                table: 0,
+                afterRowid: compressionCalls * 64,
+                scanned: compressionCalls * 64,
+                converted: compressionCalls * 64,
+                sourceBytes: compressionCalls * 4096,
+                savedBytes: compressionCalls * 3000,
+                oversized: 0,
+                conflicts: 0,
+                completedAt: compressionCalls === 2 ? 1 : null,
+              },
+            }),
+          );
+        return;
+      }
+      if (request.url === "/internal/exact-review/canonical-bodies/maintenance") {
+        let body = "";
+        for await (const chunk of request) body += chunk;
+        canonicalCalls++;
+        assert.equal(
+          request.headers["x-clawsweeper-exact-review-signature"],
+          "sha256=" + createHmac("sha256", secret).update(body).digest("hex"),
+        );
+        const payload = JSON.parse(body);
+        assert.equal(payload.action, "migrate");
+        assert.equal(payload.execute, true);
+        assert.equal(payload.expectedDeploymentSha, "e".repeat(40));
+        assert.equal(payload.reviewedPreviewSha256, "f".repeat(64));
+        response.setHeader("content-type", "application/json");
+        if (canonicalCalls === 3 && canonicalMode !== "success") {
+          response.setHeader(
+            "x-clawsweeper-exact-review-trace",
+            "12345678-1234-4123-8123-123456789abc",
+          );
+          response.statusCode =
+            canonicalMode === "conflict"
+              ? 409
+              : ["malformed", "checkpoint", "completion", "failed"].includes(canonicalMode)
+                ? 200
+                : 500;
+          response.end(
+            canonicalMode === "malformed"
+              ? "private-response-sentinel"
+              : ["checkpoint", "completion", "failed"].includes(canonicalMode)
+                ? JSON.stringify({
+                    ok: canonicalMode !== "failed",
+                    checkpoint: {
+                      after_rowid: canonicalMode === "checkpoint" ? -1 : 12,
+                      migrated: 12,
+                      completed_at:
+                        canonicalMode === "completion" ? "private-completion-sentinel" : null,
+                    },
+                  })
+                : JSON.stringify({
+                    error:
+                      canonicalMode === "conflict"
+                        ? "canonical_tiering_deployment_mismatch"
+                        : "private_snake_case_sentinel",
+                    failure_category:
+                      canonicalMode === "platform"
+                        ? "platform_overloaded"
+                        : "private-category-sentinel",
+                    message: "https://private.example.test/token synthetic-policy-token",
+                  }),
+          );
+          return;
+        }
+        response.end(
+          JSON.stringify({
+            ok: true,
+            checkpoint: {
+              after_rowid: canonicalCalls * 4,
+              migrated: canonicalCalls * 4,
+              completed_at: canonicalCalls === 3 ? 1 : null,
+              plan_json: "private-plan-sentinel",
+            },
+          }),
+        );
+        return;
+      }
       if (request.url === "/internal/exact-review/lifecycle/terminal-disposition") {
         let body = "";
         for await (const chunk of request) body += chunk;
@@ -351,6 +624,46 @@ test("maintenance CLI signs one HTTPS dry run, redacts identities, and refuses r
   });
   assert.equal(calls, 3);
   assert.equal(redirectedCalls, 0);
+
+  const compress = () =>
+    promisify(execFile)(
+      process.execPath,
+      [
+        "dist/repair/exact-review-queue-maintenance.js",
+        "read-model-compression",
+        "--apply",
+        "--expected-deployment-sha",
+        "e".repeat(40),
+        "--reviewed-plan-sha256",
+        "f".repeat(64),
+      ],
+      {
+        timeout: 10_000,
+        env: {
+          PATH: process.env.PATH,
+          NODE_EXTRA_CA_CERTS: cert,
+          EXACT_REVIEW_QUEUE_URL: endpoint,
+          CLAWSWEEPER_WEBHOOK_SECRET: secret,
+        },
+      },
+    );
+  const compressed = await compress();
+  assert.equal(compressionCalls, 2);
+  assert.equal(JSON.parse(compressed.stdout).stop, "complete");
+  compressionCalls = 0;
+  compressionFailure = true;
+  await assert.rejects(compress(), (error: Error & { stdout: string; stderr: string }) => {
+    assert.equal(compressionCalls, 2, "failed mutation is never automatically retried");
+    const failure = JSON.parse(error.stderr.split("\n")[0]!);
+    assert.equal(failure.status, "read_model_compression_failed");
+    assert.equal(failure.last_observed_checkpoint.scanned, 64);
+    assert.equal(failure.completed_passes, 1);
+    assert.doesNotMatch(
+      error.stderr,
+      /private_marker|private-response-sentinel|synthetic-maintenance-secret/,
+    );
+    return true;
+  });
 
   const hash = (value: string) => createHash("sha256").update(value).digest("hex");
   const plan = {
@@ -516,4 +829,184 @@ test("maintenance CLI signs one HTTPS dry run, redacts identities, and refuses r
   }
   assert.equal(calls, 3);
   assert.equal(redirectedCalls, 0);
+  const attestation = {
+    operator: "synthetic-operator",
+    rollbackFloor: {
+      sha: "e".repeat(40),
+      supportsFormats: [1, 2],
+      proof: "synthetic qualified candidate",
+    },
+    bucketLifecycle: {
+      bucketIdentity: "clawsweeper-state-snapshots",
+      observedAt: "2026-10-16T00:00:00Z",
+      rulesJson: '{"rules":[]}',
+      canonicalBodiesDoNotExpire: true,
+    },
+  };
+  const attestationPath = join(directory, "canonical-attestation.json"),
+    loader = join(directory, "canonical-policy-fixture.mjs");
+  writeFileSync(attestationPath, JSON.stringify(attestation));
+  writeFileSync(
+    loader,
+    'const original=globalThis.fetch;globalThis.fetch=(input,init)=>{if(String(input).startsWith("https://api.cloudflare.com/")){if(process.env.SYNTHETIC_THROW_POLICY)throw new Error("private-policy-sentinel https://private.example.test/token "+process.env.CLOUDFLARE_API_TOKEN);return Promise.resolve(Response.json({success:true,result:{rules:process.env.SYNTHETIC_UNSAFE_POLICY?[{id:"unsafe",enabled:true,conditions:{prefix:""},deleteObjectsTransition:{}}]:[]}}));}return original(input,init);};',
+  );
+  const canonicalArgs = [
+    "--import",
+    loader,
+    "dist/repair/exact-review-queue-maintenance.js",
+    "canonical-bodies",
+    "--action",
+    "migrate",
+    "--apply",
+    "--expected-deployment-sha",
+    "e".repeat(40),
+    "--attestation-file",
+    attestationPath,
+    "--reviewed-plan-sha256",
+    "f".repeat(64),
+  ];
+  const canonicalEnv = {
+    ...env,
+    CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+    CLOUDFLARE_API_TOKEN: "synthetic-policy-token",
+  };
+  const migrated = await promisify(execFile)(process.execPath, canonicalArgs, {
+    ...runtime,
+    env: canonicalEnv,
+  });
+  assert.equal(canonicalCalls, 3);
+  assert.equal(JSON.parse(migrated.stdout).passes, 3);
+  assert.equal(JSON.parse(migrated.stdout).stop, "complete");
+  await assert.rejects(
+    promisify(execFile)(process.execPath, canonicalArgs, {
+      ...runtime,
+      env: { ...canonicalEnv, SYNTHETIC_UNSAFE_POLICY: "1" },
+    }),
+    (error: Error & { stdout: string; stderr: string }) => {
+      assert.match(error.stderr, /canonical_tiering_failed/);
+      assert.doesNotMatch(
+        error.stdout + error.stderr,
+        /synthetic-policy-token|synthetic-maintenance-secret/,
+      );
+      return true;
+    },
+  );
+  assert.equal(canonicalCalls, 3);
+  await assert.rejects(
+    promisify(execFile)(process.execPath, canonicalArgs, {
+      ...runtime,
+      env: { ...canonicalEnv, SYNTHETIC_THROW_POLICY: "1" },
+    }),
+    (error: Error & { stdout: string; stderr: string }) => {
+      const failure = JSON.parse(
+        error.stderr.split("\n").find((line) => line.startsWith('{"ok":false'))!,
+      );
+      assert.equal(failure.stage, "lifecycle");
+      assert.equal(failure.reason, "unknown");
+      assert.equal(failure.completed_passes, 0);
+      assert.equal(failure.last_observed_checkpoint, null);
+      assert.doesNotMatch(error.stdout + error.stderr, /private|synthetic-policy-token|https:/);
+      return true;
+    },
+  );
+  assert.equal(canonicalCalls, 3);
+  for (const mode of [
+    "platform",
+    "conflict",
+    "unknown",
+    "malformed",
+    "checkpoint",
+    "completion",
+    "failed",
+  ]) {
+    const localValidation = ["checkpoint", "completion", "failed"].includes(mode);
+    canonicalCalls = 0;
+    canonicalMode = mode;
+    await assert.rejects(
+      promisify(execFile)(process.execPath, canonicalArgs, {
+        ...runtime,
+        env: canonicalEnv,
+      }),
+      (error: Error & { stdout: string; stderr: string }) => {
+        const lines = error.stderr.trim().split("\n");
+        const failure = JSON.parse(lines.find((line) => line.startsWith('{"ok":false'))!);
+        assert.equal(failure.status, "canonical_tiering_failed");
+        assert.equal(failure.stage, localValidation ? "queue_response" : "queue_request");
+        assert.equal(failure.completed_passes, 2);
+        assert.deepEqual(failure.last_observed_checkpoint, {
+          after_rowid: 8,
+          migrated: 8,
+          completed_at: null,
+        });
+        assert.equal(
+          failure.reason,
+          mode === "malformed" || localValidation ? "invalid_response" : "http_error",
+        );
+        assert.equal(
+          failure.http_status,
+          mode === "conflict" ? 409 : mode === "malformed" ? 200 : localValidation ? null : 500,
+        );
+        assert.equal(
+          failure.code,
+          mode === "conflict" ? "canonical_tiering_deployment_mismatch" : null,
+        );
+        assert.equal(failure.failure_category, mode === "platform" ? "platform_overloaded" : null);
+        if (!localValidation)
+          assert.equal(failure.trace_id, "12345678-1234-4123-8123-123456789abc");
+        assert.doesNotMatch(
+          error.stdout + error.stderr,
+          /private[-_]|synthetic-policy-token|synthetic-maintenance-secret|https:/,
+        );
+        assert.equal(lines.at(-1), "[exact-review-queue-maintenance] FAILED (exit 1)");
+        return true;
+      },
+    );
+    assert.equal(canonicalCalls, 3, "the failed pass is never automatically retried");
+  }
+});
+
+test("usage workflow keeps read credentials separate from one authorized canary attempt", () => {
+  assert.deepEqual((workflow.on.workflow_dispatch.inputs.mode as { options: string[] }).options, [
+    "reconcile",
+    "retire-closed-publication",
+    "storage-stats",
+    "canonical-bodies",
+    "read-model-compression",
+    "canonical-records-verify",
+    "operator-read",
+    "canary",
+    "read-back",
+  ]);
+  const read = workflow.jobs["usage-read"]!;
+  const write = workflow.jobs["usage-canary"]!;
+  const after = workflow.jobs["usage-read-after"]!;
+  for (const job of [read, write, after]) {
+    assert.match(job.if!, /github.repository == 'openclaw\/clawsweeper'/);
+    assert.match(job.if!, /github.ref == 'refs\/heads\/main'/);
+    assert.equal(job.steps[0]?.with?.ref, "${{ github.sha }}");
+    assert.equal(job.steps[0]?.with?.["persist-credentials"], false);
+    for (const step of job.steps) assert.doesNotMatch(step.run ?? "", /\$\{\{/);
+  }
+  for (const job of [read, after]) {
+    const step = job.steps.find((step) => step.run === "node scripts/review-usage-operator.mjs")!;
+    assert.equal(
+      step.env?.CLOUDFLARE_API_TOKEN,
+      "${{ secrets.OPENCLAW_CLOUDFLARE_WORKERS_API_TOKEN }}",
+    );
+    assert.equal(step.env?.CLAWSWEEPER_WEBHOOK_SECRET, undefined);
+  }
+  const submit = write.steps.find((step) => step.run === "node scripts/review-usage-operator.mjs")!;
+  assert.equal(submit.env?.CLOUDFLARE_API_TOKEN, undefined);
+  assert.equal(submit.env?.CLAWSWEEPER_WEBHOOK_SECRET, "${{ secrets.CLAWSWEEPER_WEBHOOK_SECRET }}");
+  assert.equal(submit.env?.USAGE_GUARD_SOURCE_SHA, "${{ needs.usage-read.outputs.source_sha }}");
+  assert.equal(
+    submit.env?.USAGE_GUARD_DEPLOY_SHA,
+    "${{ needs.usage-read.outputs.deployment_sha }}",
+  );
+  assert.match(
+    write.if!,
+    /inputs.execute && inputs.authorize_usage_canary && github.run_attempt == 1/,
+  );
+  assert.match(after.if!, /always\(\)/);
+  assert.match(after.if!, /needs.usage-canary.result == 'failure'/);
 });

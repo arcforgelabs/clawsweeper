@@ -35,11 +35,22 @@ not split reports into issue/PR subtrees.
 ## Operating Model
 
 - Review lane is proposal-only. It never closes GitHub items.
-- Maintainer-authored items and items labeled `maintainer` require an explicit
-  `@clawsweeper review` request unless an existing automation opt-in label is set.
+- Ordinary PRs receive one automatic completed review after ten quiet minutes.
+  Later pushes, edits, reopen events, and scheduled passes require a new explicit
+  review request. Failed or stale-source attempts can finish the first review.
+  `clawsweeper:autofix` and `clawsweeper:automerge` no longer change review
+  admission; they only keep their close protection.
+- Maintainer-authored items and items labeled `maintainer` created from
+  2026-10-15 03:50 UTC are reviewed like everyone else's: a PR gets its one
+  automatic review. Older maintainer items need an explicit `@clawsweeper review`
+  request.
   Finish the work and validation first; request review only when it is needed.
   Agents must not request reviews automatically or repeat a queued/running request.
-  An explicit review request does not enable automatic review of later changes.
+  An explicit review request stays open while the queue requeues its own review
+  after source drift, in place or from the publisher still holding the request's
+  publication; that retry continues the request. A finished or replaced
+  request, later changes after the answer, and scheduled passes need a new
+  request.
 - Apply lane mutates GitHub by syncing the durable Codex review comment and then
   closing only unchanged, high-confidence proposals.
 - Repository-specific rules live in `src/repository-profiles.ts`; ClawHub apply
@@ -74,7 +85,11 @@ not split reports into issue/PR subtrees.
 - For apply-path repros, copy one report into a temp `items/` dir and pass
   `--skip-dashboard`, `--item-number`, and a temp `--closed-dir`.
 - Treat maintainer-authored and protected-label items as non-closeable, except
-  for the maintainer-approved metadata-only `oversized_pull_request` policy:
+  for `implemented_on_main` with its existing
+  source/history/release evidence and fresh apply guards (PRs additionally need
+  GitHub-verified merged same-repository fixing provenance and paired-issue
+  relationship checks; see `docs/implemented-on-main-close-policy.md`), and
+  the maintainer-approved metadata-only `oversized_pull_request` policy:
   drafts, maintainer authorship, and the `maintainer` label do not exempt that
   reason. Its explicit PR exemption labels, `size: accepted-large`, other
   protected labels, live freshness checks, and apply gates still apply.
@@ -93,11 +108,21 @@ not split reports into issue/PR subtrees.
 ## PR Validation and Landing
 
 - For code-bearing changes, run focused validation that exercises the changed
-  behavior, then run a fresh Codex `/review` before committing and again on the
-  committed branch against its base before landing. Address every accepted or
-  actionable finding and repeat the relevant proof and review. CI, an older
-  ClawSweeper comment, prior review comments, or manual self-review alone do
-  not replace this loop.
+  behavior, commit the final candidate, then obtain a fresh Codex review of the
+  entire committed branch against a pinned intended base. Require a clean index
+  and working tree; review the merge-base-to-HEAD range, not only the last commit.
+  Complete this review before publication, handoff, or landing, including direct
+  pushes where otherwise permitted. Early local review is optional feedback and
+  does not replace this final branch review. See `CONTRIBUTING.md` for the command.
+- Address every accepted or actionable finding and repeat the affected proof and
+  review after fixes. A changed head, parent or selected base/range, dirty source,
+  post-review hook edits, or changed review evidence, context, or applicable policy
+  invalidates the affected review. Verify the final source after hooks and before
+  publication or handoff. A failed or incomplete review never falls back to an
+  earlier clean result; repeat review when needed, not merely to obtain a nicer
+  verdict. An unchanged Git tree alone does not establish equivalent review inputs.
+  CI, an older ClawSweeper comment, prior review comments, or manual self-review
+  alone do not replace this loop or the separate gates below.
 - At task kickoff, define the `pr-behavior-proof` contract for every
   code-bearing PR: claim, exercised surface, scenario or fixture, command and
   environment, observable result, artifact or trace, and limits. Run its
@@ -111,25 +136,24 @@ not split reports into issue/PR subtrees.
   artifact, and limits. Use the narrowest meaningful proof first and broaden
   it for shared or higher-risk behavior. Docs-only changes normally need
   `git diff --check` and relevant link or command sanity instead.
-- For lifecycle/review publication, queue/workflow, status/telemetry, or
-  dashboard data-contract changes, state in the PR or handoff whether
-  OpenClaw Bay is affected. If it is, update Bay and its proof; otherwise
-  record why no Bay change is needed. OpenClaw Bay is a public, indexable,
-  observer-only surface: it may display status and provide view-only navigation
-  to verified-public GitHub repository, item, workflow-run, and job pages. Those
-  canonical GET links are references, not action controls. Bay must never call
-  GitHub from the browser or trigger or offer queue, workflow, GitHub, DLQ,
-  recovery, deploy, rollback, or other mutation controls.
+- The public dashboard is observer-only: it may display status and provide
+  view-only navigation to verified-public GitHub repository, item, workflow-run,
+  and job pages. Those canonical GET links are references, not action controls.
+  It never calls GitHub from the browser and never triggers or offers queue,
+  workflow, GitHub, DLQ, recovery, deploy, rollback, or other mutation controls.
 - A ClawSweeper result that requires proof or identifies an accepted/actionable
   finding remains PR-owner work, not a handoff. Before a manually requested
   review or re-review, put current proof and the finding disposition or evidence
-  in the main PR body. A head or PR-body change after the durable review marker
+  in the main PR body. A head or review-content body change after the durable review marker
   makes that review and any affected proof stale: rerun the affected proof and
   obtain a review for the current head and body. CI, labels, readiness, and
   maintainer permissions are evidence only; the explicit-user-approval boundary
   below still controls landing.
 - Before merge or automerge, the latest ClawSweeper review must apply to the
-  current PR head and body. Resolve every accepted finding. Apply each
+  current PR head and review-content body. The canonical preflight reader excludes
+  one valid advisory annotation only; human text, proof, and all outside whitespace
+  remain review content. Raw event and concurrency guards can still invalidate
+  after a metadata edit. Resolve every accepted finding. Apply each
   applicable `Rank-up moves:` item, or explicitly justify the exception in the
   PR body; Rank-up moves remain optional and do not by themselves block merge.
   Do not merge while proof is missing or while the review has an unresolved

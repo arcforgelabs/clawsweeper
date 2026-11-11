@@ -1,5 +1,6 @@
 import type { CreateApplyDecisionWorkflowDependencies } from "./clawsweeper-apply-dependencies.js";
 import type {
+  AcquiredReviewStartLease,
   ActionTaken,
   ApplyResult,
   CloseReason,
@@ -8,6 +9,10 @@ import type {
   PrCloseCoverageProofGateBlock,
 } from "./clawsweeper-types.js";
 import { replaceFrontMatterValue } from "./report-front-matter.js";
+import {
+  PR_CLOSE_COVERAGE_PROOF_REASONS,
+  requiresPrCloseCoverageProof,
+} from "./clawsweeper-policy.js";
 
 type ApplyReviewGuardDependencies = Pick<
   CreateApplyDecisionWorkflowDependencies,
@@ -153,7 +158,7 @@ export function createApplyReviewGuards(
     return (
       liveState === "open" &&
       (state.staleCanonicalCommentSyncPending ||
-        (state.closeReason === "duplicate_or_superseded" &&
+        (requiresPrCloseCoverageProof(state.closeReason) &&
           (state.isCloseProposal || (decision === "close" && shouldProbeClosedState))))
     );
   };
@@ -221,22 +226,21 @@ export function createApplyReviewGuards(
   const canonicalBoundStaleReviewReason = (
     sourceMarkdown: string,
     comment: Record<string, unknown> | undefined,
+    liveLease?: AcquiredReviewStartLease | null,
   ): string | null => {
     const staleReason = staleReviewCommentSyncReason(
       sourceMarkdown,
       comment,
       number,
       item.kind === "pull_request" ? currentItemContext() : undefined,
+      liveLease,
     );
     const pendingCanonicalNumber = staleCanonicalPullRequestNumber(getState().markdown);
     if (!staleCanonicalClosedUnmergedValidated || pendingCanonicalNumber === null)
       return staleReason;
     if (
-      reviewCommentHasCloseVerdictForCanonical(
-        comment,
-        number,
-        "duplicate_or_superseded",
-        pendingCanonicalNumber,
+      PR_CLOSE_COVERAGE_PROOF_REASONS.some((reason) =>
+        reviewCommentHasCloseVerdictForCanonical(comment, number, reason, pendingCanonicalNumber),
       )
     ) {
       return null;
@@ -246,8 +250,10 @@ export function createApplyReviewGuards(
       `live durable review comment is not bound to stored canonical PR #${pendingCanonicalNumber}; fresh review required before stale comment correction`
     );
   };
-  const refreshedReviewStaleReason = (comment: Record<string, unknown> | undefined) =>
-    canonicalBoundStaleReviewReason(markdownBeforeApplyDecisionMutations, comment);
+  const refreshedReviewStaleReason = (
+    comment: Record<string, unknown> | undefined,
+    liveLease?: AcquiredReviewStartLease | null,
+  ) => canonicalBoundStaleReviewReason(markdownBeforeApplyDecisionMutations, comment, liveLease);
   const verifiedNewerReviewTuple = (
     sourceMarkdown: string,
     comment: Record<string, unknown> | undefined,

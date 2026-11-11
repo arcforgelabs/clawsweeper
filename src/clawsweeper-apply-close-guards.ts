@@ -6,6 +6,7 @@ import {
 } from "./clawsweeper-apply-close-decision.js";
 import { liveApplyCloseReasonPolicyBlock } from "./clawsweeper-apply-close-policies.js";
 import type {
+  ApplyCloseGuardBlock,
   ActionTaken,
   ApplyKind,
   AuthorPrBudgetApplyGate,
@@ -29,6 +30,10 @@ import {
 import { lockedConversationApplyReason } from "./clawsweeper-item-policy.js";
 import { markdownRepository } from "./clawsweeper-repository-paths.js";
 import { reportReviewDecision } from "./report-review-decision.js";
+import {
+  requiresPrCloseCoverageProof,
+  requiresMaintainerProductClose,
+} from "./clawsweeper-policy.js";
 
 export function markLockedConversationApplySkipped(
   reason: string | null,
@@ -145,9 +150,9 @@ interface ApplyCloseGuardContext {
     processedCount: number;
     storedUpdatedAt: string | undefined;
   };
-  currentObsoleteFixPrBlockReason: () => string | null;
+  currentObsoleteFixPrBlock: () => ApplyCloseGuardBlock | null;
   currentPrCloseCoverageProofGateBlock: () => PrCloseCoverageProofGateBlock | null;
-  currentStaleVersionBugBlockReason: () => string | null;
+  currentStaleVersionBugBlock: () => ApplyCloseGuardBlock | null;
   fileEntries: ReportEntry[];
   isRetryableSkippedClose: boolean;
   item: Item;
@@ -173,9 +178,9 @@ export function createApplyCloseGuards(
     commentSyncMinAgeDays,
     currentAuthorPrBudgetApplyGate,
     currentCloseState,
-    currentObsoleteFixPrBlockReason,
+    currentObsoleteFixPrBlock,
     currentPrCloseCoverageProofGateBlock,
-    currentStaleVersionBugBlockReason,
+    currentStaleVersionBugBlock,
     fileEntries,
     isRetryableSkippedClose,
     item,
@@ -216,11 +221,7 @@ export function createApplyCloseGuards(
 
   const currentCloseGatesPassed = (): boolean => {
     const { closeReason, markdown, needsReviewCommentSync, storedUpdatedAt } = currentCloseState();
-    if (
-      requiredMaintainerDecision?.required &&
-      closeReason !== "unsponsored_feature_request" &&
-      closeReason !== "author_pr_budget_exceeded"
-    )
+    if (requiredMaintainerDecision?.required || requiresMaintainerProductClose(closeReason))
       return false;
     if (!closeReason || !closeReasonEnabled(closeReason, applyCloseReasons)) return false;
     if (needsReviewCommentSync) return false;
@@ -241,7 +242,7 @@ export function createApplyCloseGuards(
       return false;
     }
     if (
-      closeReason === "duplicate_or_superseded" &&
+      requiresPrCloseCoverageProof(closeReason) &&
       duplicateCanonicalPullRequestBlockReason(markdown, item, {
         reportDirs: [itemsDir, closedDir],
       })
@@ -261,8 +262,8 @@ export function createApplyCloseGuards(
       liveApplyCloseReasonPolicyBlock(dependencies, {
         closeReason,
         currentAuthorPrBudgetApplyGate,
-        currentObsoleteFixPrBlockReason,
-        currentStaleVersionBugBlockReason,
+        currentObsoleteFixPrBlock,
+        currentStaleVersionBugBlock,
         item,
         markdown,
         number,
@@ -409,10 +410,10 @@ export function createApplyCloseGuards(
                 counterpartItem,
                 counterpartMarkdown,
               ),
-            currentObsoleteFixPrBlockReason: () =>
-              dependencies.obsoleteFixPrApplyBlockReasonSafe(counterpartNumber, counterpartItem),
-            currentStaleVersionBugBlockReason: () =>
-              dependencies.staleVersionBugApplyBlockReasonSafe(counterpartNumber, counterpartItem),
+            currentObsoleteFixPrBlock: () =>
+              dependencies.obsoleteFixPrApplyBlockSafe(counterpartNumber, counterpartItem),
+            currentStaleVersionBugBlock: () =>
+              dependencies.staleVersionBugApplyBlockSafe(counterpartNumber, counterpartItem),
             item: counterpartItem,
             markdown: counterpartMarkdown,
             number: counterpartNumber,

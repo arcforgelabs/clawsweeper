@@ -22,7 +22,10 @@ import { readAllSpooledActionEvents } from "../dist/action-ledger.js";
 import { closeDecision, reviewFinding, withMockGh, withReviewRecord } from "./helpers.ts";
 import { AgentInputScanError, agentInputScanFailureExitCode } from "../dist/agent-input-scan.js";
 import { prepareOpenClawCodexSourceForReview } from "../dist/openclaw-codex-source.js";
-import { reviewStatusForDecision } from "../dist/clawsweeper-report-document.js";
+import {
+  reviewStatusForDecision,
+  updateReviewStructuralFrontMatter,
+} from "../dist/clawsweeper-report-document.js";
 import { previousClawSweeperReviewFromComment } from "../dist/clawsweeper-review-comments.js";
 import { hydratePullRequestReviewSource } from "../dist/clawsweeper-context-hydration.js";
 import { withGitHubRun } from "../dist/clawsweeper-github-runtime.js";
@@ -32,8 +35,14 @@ import {
   ReviewGitError,
 } from "../dist/clawsweeper-review-blobs.js";
 import { ReviewSourcePreparationError } from "../dist/review-source-preparation.js";
-import { ValidationRecoveryRequiredError } from "../dist/repair/validation-recovery.js";
+import { ValidationRecoveryRequiredError } from "../dist/validation-recovery.js";
 import { reviewOutputItemBudget } from "../dist/review-output-policy.js";
+import { serializeReviewPreflightPayload } from "../dist/review-preflight-contract.js";
+import {
+  withHostedPreflightSource,
+  withLocalPreflightSource,
+} from "../dist/review-preflight-display.js";
+import { renderReviewCommentFromReport } from "../dist/clawsweeper-report-comment-presentation.js";
 
 import { parseArgs } from "../dist/clawsweeper-args.js";
 import {
@@ -47,6 +56,7 @@ import {
   suppliedReviewStartLeaseFromArgs,
 } from "../dist/clawsweeper-review-lease.js";
 import { PUBLIC_CODEX_MODEL } from "../dist/codex-env.js";
+import { itemContentDigest } from "../dist/clawsweeper-source-revision.js";
 import {
   createReviewStructuralRecord,
   type ReviewStructuralSnapshot,
@@ -60,6 +70,8 @@ const LEASE_COMMENT_ID = 456;
 const PRIOR_ACTIVITY_AT = "2026-08-07T10:00:00Z";
 const RESERVED_AT = "2026-08-07T10:05:00Z";
 const HELD_LEASE_EXPIRES_AT = "2026-08-07T11:00:00Z";
+const CURRENT_TARGET_SHA = "a".repeat(40);
+const REVIEWED_TARGET_SHA = "b".repeat(40);
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -201,7 +213,12 @@ const scheduledScenarios = [
   "changed-pr-partial-json-generic",
   "content-clean",
   "content-held",
+  "content-target-drift",
+  "content-target-drift-expired",
   "fresh-refusal",
+  "closed-before-selection",
+  "closed-pinned-before-selection",
+  "empty-batch-selection",
 ];
 
 interface OutputBudgetCase {
@@ -214,14 +231,24 @@ function testScheduledCacheScenario(
   scenario: string,
   publicationCase?: PublicationCacheCase,
   outputCase?: OutputBudgetCase,
+  preflightCase?: {
+    local: boolean;
+    missing?: boolean;
+    metadata?: boolean;
+    stale?: boolean;
+    hostedPrior?: boolean;
+  },
 ) {
-  const name = outputCase
-    ? `${scenario} ${outputCase.localOnly ? "local" : "hosted"} ${outputCase.retention} ${outputCase.surface} run admission`
-    : publicationCase
-      ? `${scenario} publication policy ${publicationCase.name}`
-      : `scheduled ${scenario} preserves admission and terminal ledger classification`;
+  const name = preflightCase
+    ? `preflight display ${scenario} ${JSON.stringify(preflightCase)}`
+    : outputCase
+      ? `${scenario} ${outputCase.localOnly ? "local" : "hosted"} ${outputCase.retention} ${outputCase.surface} run admission`
+      : publicationCase
+        ? `${scenario} publication policy ${publicationCase.name}`
+        : `scheduled ${scenario} preserves admission and terminal ledger classification`;
   test(name, (t) => {
     const refuseScan = scenario.endsWith("refusal");
+    const closedBeforeSelection = scenario.startsWith("closed-");
     const invalidProofPrior = scenario.startsWith("changed-pr-proof-");
     const proofMaintainerChange = scenario === "changed-pr-proof-maintainer-change";
     const writeAccessAuthor = scenario === "changed-pr-write-access";
@@ -243,12 +270,20 @@ function testScheduledCacheScenario(
       ? scenario.slice("changed-pr-partial-json-".length)
       : null;
     const changedPr = scenario.startsWith("changed-pr-");
-    const isPullRequest = changedPr || cacheRecovery;
+    const isPullRequest = changedPr || cacheRecovery || Boolean(preflightCase);
     const fresh = scenario === "fresh-refusal" || changedPr;
     const publicationCacheMiss = publicationCase?.compatible === false;
     const contentPath = scenario.startsWith("content-");
-    const hydrated = fresh || contentPath || cacheRecovery || publicationCacheMiss;
+    const hydrated =
+      fresh ||
+      contentPath ||
+      cacheRecovery ||
+      publicationCacheMiss ||
+      Boolean(preflightCase?.local);
     const heldElsewhere = scenario === "content-held";
+    // Only the target branch moved since the last full issue review.
+    const targetDrift = scenario.startsWith("content-target-drift");
+    const targetDriftExpired = scenario === "content-target-drift-expired";
     if (refuseScan && !earlyScanRefusal) useFakeScanner(t, "process.exit(183);");
     const root = realpathSync(mkdtempSync(join(tmpdir(), "clawsweeper-scheduled-cache-")));
     const artifactDir = join(root, "artifacts");
@@ -265,7 +300,8 @@ function testScheduledCacheScenario(
     mkdirSync(target);
     const mediaCase = outputCase?.surface === "media";
     const cumulativeCase = outputCase?.surface === "cumulative";
-    const twoItems = partialJsonFailure || mediaCase || cumulativeCase;
+    const twoItems =
+      partialJsonFailure || mediaCase || cumulativeCase || scenario === "empty-batch-selection";
     const oversized =
       outputCase?.surface === "report"
         ? "x".repeat((outputCase.retention === "debug" ? 64 : 16) * 1024 * 1024 + 1)
@@ -296,11 +332,7 @@ else {
         mkdirSync(artifactDir);
         const item = reviewOutputItemBudget("debug", 2);
         const reserved =
-          2 *
-            (item.promptFileBytes +
-              item.resultFileBytes +
-              item.streamFileBytes * 2 +
-              item.threadStateBytes) +
+          2 * (item.promptFileBytes + item.resultFileBytes + item.streamFileBytes * 2) +
           item.metadataBytes +
           item.reportsBytes;
         const existing = join(artifactDir, "existing");
@@ -327,6 +359,26 @@ else {
     git("add", ".");
     git("commit", "-qm", "change");
     const headSha = git("rev-parse", "HEAD");
+    const preflightPull = {
+      number: ITEM_NUMBER,
+      state: "open",
+      additions: preflightCase?.metadata ? 50_001 : 1,
+      deletions: 1,
+      changed_files: 1,
+      base: { sha: baseSha, repo: { full_name: REPO } },
+      head: { sha: headSha, repo: { full_name: "fork-owner/project" } },
+      body: preflightCase?.missing
+        ? "No advisory"
+        : serializeReviewPreflightPayload({
+            v: 1,
+            repo: REPO,
+            base: baseSha,
+            head: preflightCase?.stale ? baseSha : headSha,
+            tool: { name: "private-tool", version: "private-version" },
+            completion: "failed",
+            summary: "private-advisory-marker",
+          }),
+    };
     if (fetchFailure) git("remote", "add", "origin", join(root, "unavailable.git"));
     if (blobMetadataFailure) {
       const blob = git("rev-parse", `${headSha}:value.ts`);
@@ -443,14 +495,34 @@ else {
       scenario === "changed-pr-proof-invalid-cursor"
         ? "unusable-cursor"
         : `v2:0:${digest("activity")}`;
-    const priorMarkdown = withReviewRecord(
-      `---\nrepository: ${REPO}\nnumber: ${ITEM_NUMBER}\ntype: ${item.kind}\n${publicationCase?.cachedPolicy ?? ""}decision: keep_open\nreview_status: complete\nreview_activity_cursor: ${activityCursor}\n---\nCached review\n${oversized}`,
+    let priorMarkdown = withReviewRecord(
+      `---\nrepository: ${REPO}\nnumber: ${ITEM_NUMBER}\ntype: ${item.kind}\n${preflightCase ? `pull_head_sha: ${headSha}\n` : ""}${targetDrift ? `main_sha: ${REVIEWED_TARGET_SHA}\nreview_structural_target_head_sha: ${REVIEWED_TARGET_SHA}\n` : ""}${publicationCase?.cachedPolicy ?? ""}decision: keep_open\nreview_status: complete\nreview_activity_cursor: ${activityCursor}\n---\nCached review\n${oversized}`,
       {
         decision: "keep_open",
         closeReason: "none",
         summary: "Cached review",
       },
     );
+    if (preflightCase)
+      priorMarkdown = (
+        preflightCase.hostedPrior ? withHostedPreflightSource : withLocalPreflightSource
+      )(priorMarkdown, {
+        repo: REPO,
+        number: ITEM_NUMBER,
+        targetDir: target,
+        pull: {
+          ...preflightPull,
+          body: serializeReviewPreflightPayload({
+            v: 1,
+            repo: REPO,
+            base: baseSha,
+            head: headSha,
+            tool: { name: "old", version: "1" },
+            completion: "complete",
+            summary: "old summary",
+          }),
+        },
+      });
     if (publicationCase) {
       mkdirSync(itemsDir);
       writeFileSync(join(itemsDir, `${ITEM_NUMBER}.md`), priorMarkdown);
@@ -511,7 +583,7 @@ else {
     );
 
     const dependencies = {
-      ghJson: () => ({}),
+      ghJson: () => (preflightCase ? preflightPull : {}),
       get activeReviewMutationRunner() {
         return activeReviewMutationRunner;
       },
@@ -586,14 +658,24 @@ process.exitCode = 1;
         reviewPolicy: POLICY,
         reviewModel: PUBLIC_CODEX_MODEL,
         itemSourceRevision: priorRecord.sourceRevision,
-        contentDigest: fresh ? digest("old-content") : digest("content"),
-        lastFullReviewAt: new Date(Date.now() - 60_000).toISOString(),
+        contentDigest: fresh
+          ? digest("old-content")
+          : targetDrift
+            ? itemContentDigest(item, context, {
+                mainSha: REVIEWED_TARGET_SHA,
+                releaseStateComplete: true,
+                latestRelease: null,
+              })
+            : digest("content"),
+        lastFullReviewAt: new Date(
+          Date.now() - (targetDriftExpired ? 25 * 60 * 60_000 : 60_000),
+        ).toISOString(),
         lastFullReviewDecision: "keep_open",
         structuralRecord: (fresh || contentPath) && !cacheRecovery ? null : priorRecord,
       }),
       fetchReviewStructuralRecord: ({ onPullIdentity }) => {
         structuralFetches += 1;
-        if (pull) onPullIdentity?.({ baseSha, headSha });
+        if (pull) onPullIdentity?.({ baseSha: baseSha, headSha });
         return currentRecord;
       },
       finishReviewActionLedgerItem: (options: { completionReason?: string }) => {
@@ -624,7 +706,7 @@ process.exitCode = 1;
         ];
       },
       gitInfo: () => ({
-        mainSha: "a".repeat(40),
+        mainSha: CURRENT_TARGET_SHA,
         releaseStateComplete: true,
         latestRelease: null,
       }),
@@ -641,7 +723,9 @@ process.exitCode = 1;
       isSuppliedReviewStartLease,
       reviewLeaseStillMatchesContext,
       liveClawSweeperReviewDigest: () => digest("previous"),
-      itemContentDigest: () => (changedPr ? digest("different-content") : digest("content")),
+      itemContentDigest: targetDrift
+        ? itemContentDigest
+        : () => (changedPr ? digest("different-content") : digest("content")),
       extractLatestClawSweeperReview: () => context.previousClawSweeperReview,
       extractClawSweeperReviewCommentBody: (body: string) =>
         previousClawSweeperReviewFromComment(
@@ -718,6 +802,8 @@ process.exitCode = 1;
       prepareMediaProofArtifacts: () => ({ manifestPath: null, summaryPath: null, artifacts: [] }),
       reviewEnvironment: () => ({ GH_TOKEN: "synthetic-inspection-token" }),
       buildReviewPrompt: (_item, reviewContext, _git, _additionalPrompt, runtimeHints) => {
+        if (preflightCase)
+          assert.doesNotMatch(JSON.stringify(reviewContext), /private-advisory-marker/);
         assert.equal(runtimeHints.hasGitHubToken, true);
         if (publicationCacheMiss)
           assert.deepEqual(reviewContext.previousClawSweeperReview, {
@@ -821,7 +907,7 @@ process.exitCode = 1;
           throw new Error("generic second-item failure");
         }
         assert.ok(
-          isPullRequest || publicationCacheMiss,
+          isPullRequest || publicationCacheMiss || targetDriftExpired,
           "compatible unchanged input must use the cache",
         );
         return closeDecision({
@@ -851,26 +937,31 @@ process.exitCode = 1;
       reviewActionForDecision: () => ({ actionTaken: "none" }),
       markdownFor: ({ item: reviewItem, decision }) =>
         withReviewRecord(
-          `---\nrepository: ${reviewItem.repo}\nnumber: ${reviewItem.number}\ntype: ${reviewItem.kind}\nreview_status: ${reviewStatusForDecision(decision)}\ndecision: keep_open\n---\nFresh Codex review\n${decision.reviewFindings.map((finding) => finding.title).join("\n")}\n${oversized}`,
+          `---\nrepository: ${reviewItem.repo}\nnumber: ${reviewItem.number}\ntype: ${reviewItem.kind}\n${preflightCase ? `pull_head_sha: ${headSha}\n` : ""}review_status: ${reviewStatusForDecision(decision)}\ndecision: ${decision.decision}\n---\nFresh Codex review\n${decision.reviewFindings.map((finding) => finding.title).join("\n")}\n${oversized}`,
           decision,
         ),
       selectCandidates: () => ({
-        candidates: twoItems
-          ? [
-              { ...item },
-              {
-                ...item,
-                number: ITEM_NUMBER + 1,
-                url: `https://github.com/${REPO}/pull/${ITEM_NUMBER + 1}`,
-              },
-            ]
-          : [{ ...item }],
+        candidates:
+          closedBeforeSelection || scenario === "empty-batch-selection"
+            ? []
+            : twoItems
+              ? [
+                  { ...item },
+                  {
+                    ...item,
+                    number: ITEM_NUMBER + 1,
+                    url: `https://github.com/${REPO}/pull/${ITEM_NUMBER + 1}`,
+                  },
+                ]
+              : [{ ...item }],
         scannedPages: 1,
       }),
       suppliedReviewStartLeaseFromArgs,
       targetRepo: () => REPO,
       updateBulkFilerDetectedFrontMatter: (markdown: string) => markdown,
-      updateReviewStructuralFrontMatter: (markdown: string) => markdown,
+      updateReviewStructuralFrontMatter: targetDrift
+        ? updateReviewStructuralFrontMatter
+        : (markdown: string) => markdown,
     } as never;
 
     try {
@@ -884,44 +975,64 @@ process.exitCode = 1;
           "--item-numbers",
           twoItems ? `${ITEM_NUMBER},${ITEM_NUMBER + 1}` : String(ITEM_NUMBER),
           "--readonly-openclaw",
+          ...(scenario === "closed-pinned-before-selection"
+            ? ["--expected-source-revision", "c".repeat(64)]
+            : []),
         ];
         reviewCommand(
           parseArgs(
-            outputCase
+            preflightCase
               ? [
                   ...commonArgs,
-                  ...(outputCase.retention === "none" ? [] : ["--artifact-dir", artifactDir]),
-                  "--output-retention",
-                  outputCase.retention,
+                  "--artifact-dir",
+                  artifactDir,
                   "--skip-start-comment",
-                  ...(outputCase.localOnly ? ["--local-only"] : []),
-                  ...(!outputCase.localOnly && !fresh
-                    ? ["--review-source-action", "scheduled_normal_backfill"]
-                    : []),
-                  ...(cumulativeCase ? ["--result-format", "json"] : []),
-                  ...(mediaCase || outputCase.localOnly
-                    ? []
+                  ...(preflightCase.local
+                    ? ["--local-only"]
                     : [
                         "--review-lease-owner",
                         LEASE_OWNER,
                         "--review-lease-comment-id",
                         String(LEASE_COMMENT_ID),
                       ]),
+                  "--review-source-action",
+                  "scheduled_normal_backfill",
                 ]
-              : partialJsonFailure
-                ? [...commonArgs, "--local-only", "--result-format", "json"]
-                : [
+              : outputCase
+                ? [
                     ...commonArgs,
-                    "--artifact-dir",
-                    artifactDir,
+                    ...(outputCase.retention === "none" ? [] : ["--artifact-dir", artifactDir]),
+                    "--output-retention",
+                    outputCase.retention,
                     "--skip-start-comment",
-                    "--review-lease-owner",
-                    LEASE_OWNER,
-                    "--review-lease-comment-id",
-                    String(LEASE_COMMENT_ID),
-                    "--review-source-action",
-                    "scheduled_normal_backfill",
-                  ],
+                    ...(outputCase.localOnly ? ["--local-only"] : []),
+                    ...(!outputCase.localOnly && !fresh
+                      ? ["--review-source-action", "scheduled_normal_backfill"]
+                      : []),
+                    ...(cumulativeCase ? ["--result-format", "json"] : []),
+                    ...(mediaCase || outputCase.localOnly
+                      ? []
+                      : [
+                          "--review-lease-owner",
+                          LEASE_OWNER,
+                          "--review-lease-comment-id",
+                          String(LEASE_COMMENT_ID),
+                        ]),
+                  ]
+                : partialJsonFailure
+                  ? [...commonArgs, "--local-only", "--result-format", "json"]
+                  : [
+                      ...commonArgs,
+                      "--artifact-dir",
+                      artifactDir,
+                      "--skip-start-comment",
+                      "--review-lease-owner",
+                      LEASE_OWNER,
+                      "--review-lease-comment-id",
+                      String(LEASE_COMMENT_ID),
+                      "--review-source-action",
+                      "scheduled_normal_backfill",
+                    ],
           ),
         );
       };
@@ -1208,7 +1319,64 @@ process.exitCode = 1;
         assert.equal(existsSync(join(artifactDir, `${ITEM_NUMBER}.md`)), false);
         return;
       }
+      if (scenario === "empty-batch-selection") {
+        assert.throws(execute, /A supplied review lease requires exactly one selected item/);
+        assert.equal(generationCalls, 0);
+        return;
+      }
       execute();
+
+      if (preflightCase) {
+        const report = readFileSync(join(artifactDir, `${ITEM_NUMBER}.md`), "utf8");
+        if (preflightCase.local) {
+          assert.match(report, preflightCase.missing ? /Source unknown\./ : /Source matches\./);
+          assert.equal(report.match(/## Local preflight source/g)?.length, 1);
+          assert.doesNotMatch(report, /## Preflight source/);
+        } else {
+          assert.doesNotMatch(report, /## Local preflight source/);
+          const comment = renderReviewCommentFromReport(report, "none");
+          if (preflightCase.metadata) {
+            assert.doesNotMatch(report, /## Preflight source/);
+            assert.doesNotMatch(comment, /### Preflight source/);
+          } else {
+            const state = preflightCase.missing
+              ? "unknown"
+              : preflightCase.stale
+                ? "stale"
+                : "matches";
+            assert.match(report, new RegExp(`Source ${state}\\.`));
+            assert.equal(report.match(/## Preflight source/g)?.length, 1);
+            assert.match(comment, new RegExp(`### Preflight source\\n\\nSource ${state}\\.`));
+            assert.match(comment, /Completion is self-reported/);
+            assert.doesNotMatch(comment, /private-advisory-marker|private-tool|private-version/);
+          }
+        }
+        assert.doesNotMatch(report, /private-advisory-marker|private-tool|private-version/);
+        assert.equal(generationCalls, fresh && !preflightCase.metadata ? 1 : 0);
+        assert.equal(
+          hydrationCalls,
+          preflightCase.metadata ? 0 : preflightCase.local || hydrated ? 1 : 0,
+        );
+        if (preflightCase.local)
+          assert.equal(structuralFetches, 0, "local-only cannot enter hosted structural probes");
+        assert.equal(startCommentCalls, 0);
+        assert.equal(existsSync(providerCalls), false);
+        return;
+      }
+
+      if (closedBeforeSelection) {
+        assert.equal(generationCalls, 0);
+        assert.equal(hydrationCalls, 0);
+        assert.equal(startCommentCalls, 0);
+        assert.equal(existsSync(join(artifactDir, `${ITEM_NUMBER}.md`)), false);
+        assert.equal(existsSync(join(artifactDir, "failure-diagnostics")), false);
+        const metrics = JSON.parse(
+          readFileSync(join(artifactDir, "review-cache-metrics.json"), "utf8"),
+        );
+        assert.equal(metrics.candidates, 0);
+        assert.equal(metrics.completed, 0);
+        return;
+      }
 
       if (publicationCase) {
         assert.equal(readFileSync(join(itemsDir, `${ITEM_NUMBER}.md`), "utf8"), priorMarkdown);
@@ -1235,6 +1403,20 @@ process.exitCode = 1;
         assert.match(report, /Cached review/);
       }
 
+      if (targetDriftExpired) {
+        assert.equal(hydrationCalls, 1);
+        assert.equal(generationCalls, 1);
+        assert.equal(cachedCompletions, 0);
+        assert.match(
+          readFileSync(join(artifactDir, `${ITEM_NUMBER}.md`), "utf8"),
+          /Fresh Codex review/,
+        );
+        const metrics = JSON.parse(
+          readFileSync(join(artifactDir, "review-cache-metrics.json"), "utf8"),
+        );
+        assert.equal(metrics.content_cache_hits, 0);
+        return;
+      }
       if (isPullRequest) {
         assert.equal(hydrationCalls, 1);
         assert.equal(generationCalls, 1);
@@ -1295,6 +1477,15 @@ process.exitCode = 1;
       assert.equal(existsSync(carriedReportPath), true);
       const carriedReport = readFileSync(carriedReportPath, "utf8");
       assert.match(carriedReport, /^local_checkout_access: verified$/m);
+      if (targetDrift) {
+        // The carried verdict still names the target commit that was actually reviewed,
+        // and its structural anchor cannot let the 14-day structural stage reuse it.
+        assert.match(carriedReport, new RegExp(`^main_sha: ${REVIEWED_TARGET_SHA}$`, "m"));
+        assert.match(
+          carriedReport,
+          new RegExp(`^review_structural_target_head_sha: ${REVIEWED_TARGET_SHA}$`, "m"),
+        );
+      }
       assert.match(carriedReport, /^local_checkout_access_source: runner_preflight_v1$/m);
       assert.match(carriedReport, new RegExp(`^review_lease_owner: ${LEASE_OWNER}$`, "m"));
       assert.match(
@@ -1328,6 +1519,31 @@ process.exitCode = 1;
 }
 
 for (const scenario of scheduledScenarios) testScheduledCacheScenario(scenario);
+
+for (const scenario of ["changed-pr-clean", "structural-clean", "content-clean"]) {
+  testScheduledCacheScenario(scenario, undefined, undefined, { local: true });
+  testScheduledCacheScenario(scenario, undefined, undefined, { local: true, missing: true });
+  testScheduledCacheScenario(scenario, undefined, undefined, { local: false });
+  testScheduledCacheScenario(scenario, undefined, undefined, {
+    local: false,
+    missing: true,
+    hostedPrior: true,
+  });
+  testScheduledCacheScenario(scenario, undefined, undefined, {
+    local: false,
+    stale: true,
+    hostedPrior: true,
+  });
+  testScheduledCacheScenario(scenario, undefined, undefined, { local: true, hostedPrior: true });
+}
+testScheduledCacheScenario("changed-pr-clean", undefined, undefined, {
+  local: true,
+  metadata: true,
+});
+testScheduledCacheScenario("changed-pr-clean", undefined, undefined, {
+  local: false,
+  metadata: true,
+});
 
 for (const retention of ["none", "summary", "debug"] as const) {
   testScheduledCacheScenario("changed-pr-clean", undefined, {

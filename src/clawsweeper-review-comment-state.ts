@@ -9,8 +9,10 @@ import {
   REVIEW_START_STATUS_MARKER_PREFIX,
 } from "./clawsweeper-policy.js";
 import type {
+  AcquiredReviewStartLease,
   CloseReason,
   ItemContext,
+  PullRequestReviewMarkerState,
   ReviewStartStatusCommentOptions,
 } from "./clawsweeper-types.js";
 import {
@@ -24,17 +26,20 @@ import {
   reviewStartLeaseCommentMarker,
   trailingHtmlComments,
   validReviewLeaseIdentity,
+  clearInPlaceReviewStartStatus,
+  REVIEW_STARTED_STATUS,
 } from "./review-comment-markers.js";
 import { neutralizeReviewControlMarkers } from "./review-history.js";
 import { targetRepo } from "./repository-profiles.js";
 import { ghPaged } from "./clawsweeper-github-context.js";
+import { ghJson } from "./clawsweeper-github-execution.js";
 import { reviewCommentBodyDigest } from "./clawsweeper-source-revision.js";
 import { parseGitHubItemRef } from "./clawsweeper-decision-parser.js";
 import { asRecord } from "./value-coerce.js";
 
 export function normalizeNoopReviewMarkerMetadata(body: string): string {
   // A completed re-review must publish its freshness even when the verdict is unchanged.
-  return body.replace(
+  return clearInPlaceReviewStartStatus(body).replace(
     /<!--\s+clawsweeper-(?:review-version|verdict:[^\s>]+|action:[^\s>]+|security:[^\s>]+)\b[^>]*-->/g,
     (marker) => marker.replace(/\s(?:updated_at|lease_owner|lease_comment_id)=[^\s>]+/g, ""),
   );
@@ -114,6 +119,20 @@ export function withReviewStartStatusLease(
   options: ReviewStartStatusCommentOptions,
 ): string {
   return withReviewStartStatusLeaseIdentity(body, options, reviewCommentMarker(options.number));
+}
+
+export function withQuietReviewStartStatusLease(
+  body: string,
+  options: ReviewStartStatusCommentOptions,
+): string {
+  const clean = markedReviewCommentBody(
+    options.number,
+    clearInPlaceReviewStartStatus(body, options.number),
+  );
+  const index = clean.lastIndexOf(reviewCommentMarker(options.number));
+  const leased =
+    clean.slice(0, index) + reviewStartStatusCommentMarker(options) + "\n\n" + clean.slice(index);
+  return `${REVIEW_STARTED_STATUS}\n\n${leased}`;
 }
 
 function withReviewStartStatusLeaseIdentity(
@@ -253,11 +272,22 @@ function newestCausalReviewComment(
     (latest, candidate) => Math.max(latest, candidate.identity.leaseCommentId),
     -1,
   );
-  return newestReviewComment(
+  const elected = newestReviewComment(
     number,
     causalReviews
       .filter((candidate) => candidate.identity.leaseCommentId === latestLeaseCommentId)
       .map((candidate) => candidate.comment),
+  );
+  // Quiet reviews reuse the durable id. A strictly later completed cycle on
+  // that id can supersede the former POST lease, even though its id is lower.
+  const inPlace = causalReviews.filter(
+    ({ comment, identity }) => identity.leaseCommentId === commentId(comment),
+  );
+  return newestReviewComment(
+    number,
+    [elected, ...inPlace.map(({ comment }) => comment)].filter(
+      (comment): comment is Record<string, unknown> => comment !== undefined,
+    ),
   );
 }
 
@@ -396,22 +426,44 @@ export function issueReviewComment(
   return issueReviewCommentState(number, fallbackBodies).reviewComment;
 }
 
+// Preservation needs the same raw transport as publication receipts: gh's display
+// sanitizer can change literal Unicode escapes as well as control characters.
+export function losslessReviewComment(id: number): Record<string, unknown> | undefined {
+  const comment = asRecord(
+    ghJson<unknown>(["api", `repos/${targetRepo()}/issues/comments/${id}`], {
+      losslessJson: true,
+    }),
+  );
+  return commentId(comment) === id && canPatchReviewComment(comment) ? comment : undefined;
+}
+
 export function issueReviewCommentWithBody(
   number: number,
   body: string,
   expectedId?: number,
 ): Record<string, unknown> | undefined {
   if (!body.trim()) return undefined;
-  const comments = ghPaged<unknown>(`repos/${targetRepo()}/issues/${number}/comments`).map(
-    asRecord,
-  );
+  // gh sanitizes even literal Unicode escapes inside JSON. A receipt needs
+  // original bytes; PATCH already knows the identity, so avoid a full list read.
+  if (expectedId !== undefined) {
+    const comment = losslessReviewComment(expectedId);
+    return isReviewPublicationReceipt(comment, body, expectedId) ? comment : undefined;
+  }
+  const comments: Record<string, unknown>[] = [];
+  for (let page = 1; ; page += 1) {
+    const entries = ghJson<unknown>(
+      ["api", `repos/${targetRepo()}/issues/${number}/comments?per_page=100&page=${page}`],
+      { losslessJson: true },
+    );
+    if (!Array.isArray(entries)) throw new Error("invalid review comment list response");
+    comments.push(...entries.map(asRecord));
+    if (entries.length < 100) break;
+  }
   const trustedExactComments = comments.filter((candidate) =>
-    isReviewPublicationReceipt(candidate, body, expectedId),
+    isReviewPublicationReceipt(candidate, body),
   );
-  // PATCH recovery is identity-bound; POST recovery elects the newest trusted exact comment.
-  return expectedId === undefined
-    ? newestReviewComment(number, trustedExactComments)
-    : trustedExactComments.find((candidate) => commentId(candidate) === expectedId);
+  // POST recovery elects the newest trusted exact comment.
+  return newestReviewComment(number, trustedExactComments);
 }
 
 export function isReviewPublicationReceipt(
@@ -514,7 +566,7 @@ function durableReviewVersionFromBody(
   return null;
 }
 
-function durableReviewVersion(
+export function durableReviewVersion(
   comment: Record<string, unknown> | undefined,
   number: number,
 ): ReturnType<typeof durableReviewVersionFromBody> {
@@ -532,7 +584,7 @@ export function durableReviewCausalIdentityFromBody(
   sourceRevision: string | null;
   leaseOwner: string;
   leaseCommentId: number;
-  state: "ready" | "blocked" | "needs-changes" | null;
+  state: PullRequestReviewMarkerState | null;
 } | null {
   const identity = reviewCommentMarker(number);
   const identityIndex = body.lastIndexOf(identity);
@@ -568,6 +620,8 @@ export function durableReviewCausalIdentityFromBody(
   );
   if (!stateMatch) return null;
   const state = stateMatch[1];
+  // The v1 contract: three states, fail closed on anything else. Additive attributes
+  // such as `hold=` are ignored here, so a newer producer stays readable.
   if (state !== "ready" && state !== "blocked" && state !== "needs-changes") return null;
   const stateAttributes = stateMatch[2] ?? "";
   const stateAttribute = (name: string) =>
@@ -673,6 +727,7 @@ export function staleReviewCommentSyncReason(
   existingReviewComment: Record<string, unknown> | undefined,
   number: number,
   context?: ItemContext,
+  liveLease?: AcquiredReviewStartLease | null,
 ): string | null {
   // Comment updated_at can move for command/status edits; only review markers prove verdict freshness.
   const liveVersion = durableReviewVersion(existingReviewComment, number);
@@ -703,9 +758,34 @@ export function staleReviewCommentSyncReason(
   }
   const liveLeaseCommentId = Number(liveVersion?.leaseCommentId);
   const reportLeaseCommentIdNumber = Number(reportLeaseCommentId);
+  if (
+    liveLeaseCommentId === commentId(existingReviewComment) &&
+    (reportReviewedAtMs === null || liveReviewedAtMs > reportReviewedAtMs)
+  ) {
+    return "live durable in-place review is newer than the local report";
+  }
   const reportRevision = reviewLeaseRevisionFromReport(markdown);
   const liveRevision =
     itemKind === "pull_request" ? liveVersion?.headSha : liveVersion?.sourceRevision;
+  const inPlaceMarkers = trailingHtmlComments(commentBody(existingReviewComment) ?? "");
+  const inPlaceStart = inPlaceMarkers.at(-2) ?? "";
+  const startAttribute = (name: string) =>
+    inPlaceStart.match(new RegExp(`\\b${name}=([^\\s>]+)`))?.[1];
+  const inPlaceStartedAt = parseIsoMs(startAttribute("started_at"));
+  if (
+    reportRevision &&
+    commentId(existingReviewComment) === reportLeaseCommentIdNumber &&
+    /^<!--\s*clawsweeper-review-status:started\b/.test(inPlaceStart) &&
+    startAttribute("item") === String(number) &&
+    startAttribute("v") === "1" &&
+    startAttribute("owner") === reportLeaseOwner &&
+    startAttribute("sha") === reportRevision &&
+    inPlaceStartedAt !== null &&
+    inPlaceStartedAt > liveReviewedAtMs &&
+    reportReviewedAtMs !== null &&
+    reportReviewedAtMs >= inPlaceStartedAt
+  )
+    return null;
   if (
     liveRevision &&
     reportRevision &&
@@ -715,6 +795,23 @@ export function staleReviewCommentSyncReason(
   ) {
     if (!Number.isInteger(reportLeaseCommentIdNumber) || reportLeaseCommentIdNumber <= 0) {
       return `live durable review tuple has lease comment ${liveLeaseCommentId}, but the local report has no durable lease identity`;
+    }
+    // Queued commands reuse status comments across owners. Equal ids and clocks
+    // cannot prove ordering alone: only the freshly elected original report lease
+    // may replace the older review; a newly acquired mutation lease cannot qualify.
+    if (
+      liveLeaseCommentId === reportLeaseCommentIdNumber &&
+      validReviewLeaseIdentity(liveVersion?.leaseOwner, liveVersion?.leaseCommentId) &&
+      validReviewLeaseIdentity(reportLeaseOwner, reportLeaseCommentId) &&
+      liveVersion?.leaseOwner !== reportLeaseOwner &&
+      liveLease &&
+      liveLease.owner === reportLeaseOwner &&
+      liveLease.commentId === reportLeaseCommentIdNumber &&
+      liveLease.headSha === reportRevision &&
+      reportReviewedAtMs !== null &&
+      reportReviewedAtMs > liveReviewedAtMs
+    ) {
+      return null;
     }
     if (liveLeaseCommentId >= reportLeaseCommentIdNumber) {
       return `live durable review tuple is newer than the local report: comment lease=${liveLeaseCommentId}, report lease=${reportLeaseCommentIdNumber}`;
@@ -782,7 +879,35 @@ export function newerDurableReviewTupleVerified(
     liveLeaseCommentId > 0 &&
     Number.isSafeInteger(reportLeaseCommentId) &&
     reportLeaseCommentId > 0 &&
-    liveLeaseCommentId > reportLeaseCommentId,
+    (liveLeaseCommentId > reportLeaseCommentId ||
+      ((liveLeaseCommentId === reportLeaseCommentId ||
+        liveLeaseCommentId === commentId(existingReviewComment)) &&
+        reusedLeaseReviewIsNewer(markdown, existingReviewComment, number))),
+  );
+}
+
+function reusedLeaseReviewIsNewer(
+  markdown: string,
+  comment: Record<string, unknown> | undefined,
+  number: number,
+): boolean {
+  // Command leases survive owner handoffs. For equal ids, use the canonical
+  // selector's review-time ordering only after verifying the full source identity.
+  // This acknowledges a completed successor; it never authorizes an overwrite.
+  const live = durableReviewCausalIdentity(comment, number);
+  const sourceRevision = frontMatterValue(markdown, "item_source_revision");
+  const reportReviewedAt = parseIsoMs(frontMatterValue(markdown, "reviewed_at"));
+  return Boolean(
+    live &&
+    validReviewLeaseIdentity(
+      frontMatterValue(markdown, "review_lease_owner"),
+      frontMatterValue(markdown, "review_lease_comment_id"),
+    ) &&
+    live.leaseOwner !== frontMatterValue(markdown, "review_lease_owner") &&
+    /^[0-9a-f]{64}$/i.test(sourceRevision ?? "") &&
+    live.sourceRevision === sourceRevision &&
+    reportReviewedAt !== null &&
+    (parseIsoMs(live.reviewedAt) ?? -1) > reportReviewedAt,
   );
 }
 

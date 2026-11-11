@@ -1,15 +1,17 @@
+import { reviewBodyWithoutPreflight } from "./review-preflight-body.js";
 import { AgentInputScanError } from "./agent-input-scan.js";
 import { GitHubOperationDeadlineError } from "./clawsweeper-github-runtime.js";
 import { ghJson, ghJsonEach, ghJsonOnce } from "./clawsweeper-github-execution.js";
-import { githubCount } from "./clawsweeper-github-context.js";
-import { targetRepo } from "./repository-profiles.js";
+import { readCommitChecks } from "./github-commit-checks.js";
+import { targetProfile, targetRepo } from "./repository-profiles.js";
 import { fetchIssueReviewComments } from "./clawsweeper-review-comment-state.js";
-import { isSafeGitBranchName } from "./clawsweeper-review-runtime.js";
+import { isSafeGitBranchName } from "./clawsweeper-review-core.js";
 import { ReviewSourcePreparationError } from "./review-source-preparation.js";
-import { validationRecoveryRequired } from "./repair/validation-recovery.js";
+import { validationRecoveryRequired } from "./validation-recovery.js";
 import { BULK_FILED_LABEL } from "./repair/exact-review-guard-labels.js";
 import {
   BULK_FILER_SEARCH_TIMEOUT_MS,
+  BULK_FILER_UNCOUNTED_ISSUE_RATING_LABELS,
   DAY_MS,
   DEFAULT_AUTHOR_PR_BUDGET_MAX_CLOSES_PER_RUN,
   DEFAULT_BULK_FILER_THRESHOLD,
@@ -20,7 +22,7 @@ import { quoteGitHubSearchTerm } from "./clawsweeper-related-context.js";
 import {
   ensurePullRequestReviewHead,
   ensureReviewTreeCommit,
-  githubReviewTreeBlobSizes,
+  githubReviewBlobSizes,
   hydratePullRequestReviewBlobs,
   hydratePullRequestReviewHistory,
   materializePullRequestReviewTree as materializeReviewTree,
@@ -62,11 +64,8 @@ import {
 } from "./clawsweeper-item-policy.js";
 import { authorPrBudget, positiveIntegerEnv } from "./policy-flags.js";
 
-const REVIEW_TREE_METADATA_JQ =
-  '{truncated, tree: (.tree | if type == "array" then map(if type == "object" then {type, sha, size} else . end) else . end)}';
-
-export function reviewTreeMetadataArgs(path: string): string[] {
-  return ["api", path, "--jq", REVIEW_TREE_METADATA_JQ];
+export function reviewBlobMetadataArgs(query: string): string[] {
+  return ["api", "graphql", "-f", `query=${query}`, "--jq", ".data.repository"];
 }
 
 function compactMappedSlice<T>(
@@ -122,7 +121,12 @@ function compactIssue(value: unknown): unknown {
     createdAt: issue.created_at,
     updatedAt: issue.updated_at,
     closedAt: issue.closed_at,
-    body: truncateText(issue.body, 12000),
+    body: truncateText(
+      issue.pull_request && typeof issue.body === "string"
+        ? reviewBodyWithoutPreflight(issue.body)
+        : issue.body,
+      12000,
+    ),
   };
 }
 
@@ -281,7 +285,10 @@ function compactPullRequest(value: unknown): unknown {
     changedFiles: pull.changed_files,
     createdAt: pull.created_at,
     updatedAt: pull.updated_at,
-    body: truncateText(pull.body, 12000),
+    body: truncateText(
+      typeof pull.body === "string" ? reviewBodyWithoutPreflight(pull.body) : pull.body,
+      12000,
+    ),
   };
 }
 
@@ -306,48 +313,31 @@ function compactCommitStatus(value: unknown): unknown {
 
 function pullChecksContext(number: number, headSha: string): unknown {
   try {
-    // Both reads run together; the first failure in request order is reported.
-    const [checkPayload, statusPayload] = ghJsonEach<unknown>([
-      ["api", `repos/${targetRepo()}/commits/${headSha}/check-runs?per_page=100`],
-      [`api`, `repos/${targetRepo()}/commits/${headSha}/status?per_page=100`],
-    ]).map((read) => {
-      if (!read.ok) throw read.error;
-      return read.value;
+    const checks = readCommitChecks({
+      repository: targetRepo(),
+      sha: headSha,
+      // Pages in one batch run together; the first failure in request order is reported.
+      readPages: (paths) =>
+        ghJsonEach<unknown>(paths.map((path) => ["api", path])).map((read) => {
+          if (!read.ok) throw read.error;
+          return read.value;
+        }),
     });
-    const checkResponse = asRecord(checkPayload);
-    const statusResponse = asRecord(statusPayload);
-    const rawCheckRuns = Array.isArray(checkResponse.check_runs) ? checkResponse.check_runs : null;
-    const rawStatuses = Array.isArray(statusResponse.statuses) ? statusResponse.statuses : null;
-    const checkRunsTotal = githubCount(checkResponse.total_count);
-    const statusesTotal = githubCount(statusResponse.total_count);
-    if (!rawCheckRuns || !rawStatuses || checkRunsTotal === null || statusesTotal === null) {
-      return {
-        complete: false,
-        checkRuns: [],
-        checkRunsTruncated: true,
-        statuses: [],
-        statusesTruncated: true,
-      };
-    }
-    const checkRunsTruncated = checkRunsTotal > rawCheckRuns.length || rawCheckRuns.length > 100;
-    const statusesTruncated = statusesTotal > rawStatuses.length || rawStatuses.length > 100;
     // Order by code unit, not locale collation: these feed pullChecksDigest, and
     // localeCompare returns 0 for distinct strings, which would leave GitHub's
     // arbitrary response order in the digest.
-    const checkRuns = rawCheckRuns
-      .slice(0, 100)
+    const checkRuns = checks.checkRuns
       .map(compactCheckRun)
       .sort((left, right) => compareCodeUnits(stableJson(left), stableJson(right)));
-    const statuses = rawStatuses
-      .slice(0, 100)
+    const statuses = checks.statuses
       .map(compactCommitStatus)
       .sort((left, right) => compareCodeUnits(stableJson(left), stableJson(right)));
     return {
-      complete: !checkRunsTruncated && !statusesTruncated,
+      complete: checks.complete,
       checkRuns,
-      checkRunsTruncated,
+      checkRunsTruncated: !checks.complete,
       statuses,
-      statusesTruncated,
+      statusesTruncated: !checks.complete,
     };
   } catch (error) {
     console.error(
@@ -566,23 +556,31 @@ function bulkFilerPolicyInvalidatesCachedReview(
   return !/^false$/i.test(frontMatterValue(markdown, "last_full_review_bulk_filer_detected") ?? "");
 }
 
+function bulkFilerIssueSearchQuery(author: string, windowStart: string, windowEnd: string): string {
+  // GitHub search ranges include both ends; start 1 ms later to keep the window start exclusive.
+  const rangeStart = new Date(Date.parse(windowStart) + 1).toISOString();
+  return [
+    `repo:${targetRepo()}`,
+    "type:issue",
+    `author:${quoteGitHubSearchTerm(author)}`,
+    `created:${rangeStart}..${windowEnd}`,
+    // Completed reports are excluded everywhere. Rating exclusions require the
+    // repository profile opt-in; ClawHub and generic targets remain completed-only.
+    "-reason:completed",
+    ...(targetProfile().bulkFilerExcludeHighRatedIssues === true
+      ? BULK_FILER_UNCOUNTED_ISSUE_RATING_LABELS.map(
+          (label) => "-label:" + quoteGitHubSearchTerm(label),
+        )
+      : []),
+  ].join(" ");
+}
+
 function authorIssueCountInBulkFilerWindow(
   author: string,
   windowStart: string,
   windowEnd: string,
 ): number {
-  // GitHub search ranges include both ends; start 1 ms later to keep the window start exclusive.
-  const rangeStart = new Date(Date.parse(windowStart) + 1).toISOString();
-  const query = [
-    `repo:${targetRepo()}`,
-    "type:issue",
-    `author:${quoteGitHubSearchTerm(author)}`,
-    `created:${rangeStart}..${windowEnd}`,
-    // An issue closed as completed was a real report and no longer counts. Model ratings
-    // stay counted until they are stable for unchanged issues
-    // (https://github.com/openclaw/clawsweeper/issues/1752).
-    "-reason:completed",
-  ].join(" ");
+  const query = bulkFilerIssueSearchQuery(author, windowStart, windowEnd);
   const result = ghJsonOnce<{ total_count?: number; incomplete_results?: boolean }>(
     ["api", "search/issues", "--method", "GET", "-f", `q=${query}`, "-f", "per_page=1"],
     BULK_FILER_SEARCH_TIMEOUT_MS,
@@ -786,18 +784,6 @@ function hydratePullRequestReviewSource(options: {
         "Could not establish complete review ancestry.",
       );
     }
-    const remoteTreeSizes = new Map<string, ReadonlyMap<string, number>>();
-    const treeSizes = (revision: string, deadlineAt: number): ReadonlyMap<string, number> => {
-      const cached = remoteTreeSizes.get(revision);
-      if (cached) return cached;
-      const sizes = githubReviewTreeBlobSizes({
-        repository: targetRepo(),
-        headSha: revision,
-        request: (path) => ghJson(reviewTreeMetadataArgs(path), { deadlineAt }),
-      });
-      remoteTreeSizes.set(revision, sizes);
-      return sizes;
-    };
     const hydrateBlobs = (revision: string) =>
       hydratePullRequestReviewBlobs({
         targetDir: options.targetDir,
@@ -805,14 +791,11 @@ function hydratePullRequestReviewSource(options: {
         headSha,
         resolveBlobSizes: (objectIds, deadlineAt) => {
           try {
-            const baseSizes = treeSizes(revision, deadlineAt);
-            const headSizes = revision === headSha ? baseSizes : treeSizes(headSha, deadlineAt);
-            return new Map(
-              objectIds.flatMap((objectId) => {
-                const bytes = headSizes.get(objectId) ?? baseSizes.get(objectId);
-                return bytes === undefined ? [] : [[objectId, bytes]];
-              }),
-            );
+            return githubReviewBlobSizes({
+              repository: targetRepo(),
+              objectIds,
+              request: (query) => ghJson(reviewBlobMetadataArgs(query), { deadlineAt }),
+            });
           } catch (error) {
             if (error instanceof GitHubOperationDeadlineError) {
               throw new AgentInputScanError("deadline");
@@ -871,28 +854,21 @@ export { authorPrBudget, ensurePullRequestReviewHead, removePullRequestReviewTre
 export function materializePullRequestReviewTree(
   options: Parameters<typeof materializeReviewTree>[0],
 ) {
-  let remoteTreeSizes: ReadonlyMap<string, number> | null = null;
   return materializeReviewTree({
     ...options,
-    resolveBlobSizes: (objectIds, timeoutMs) => {
-      remoteTreeSizes ??= githubReviewTreeBlobSizes({
+    resolveBlobSizes: (objectIds, timeoutMs) =>
+      githubReviewBlobSizes({
         repository: targetRepo(),
-        headSha: options.headSha,
-        request: (path) => ghJsonOnce(reviewTreeMetadataArgs(path), timeoutMs),
-      });
-      return new Map(
-        objectIds.flatMap((objectId) => {
-          const bytes = remoteTreeSizes!.get(objectId);
-          return bytes === undefined ? [] : [[objectId, bytes]];
-        }),
-      );
-    },
+        objectIds,
+        request: (query) => ghJsonOnce(reviewBlobMetadataArgs(query), timeoutMs),
+      }),
   });
 }
 
 export {
   authorIssueCountInBulkFilerWindow,
   authorPrBudgetMaxClosesPerRun,
+  bulkFilerIssueSearchQuery,
   bulkFilerPolicyInvalidatesCachedReview,
   bulkFilerRepositoryPermission,
   bulkFilerThreshold,

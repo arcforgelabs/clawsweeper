@@ -89,6 +89,14 @@ function withHostedTargetAdmissionDefaults<Env extends Record<string, unknown>>(
       value: "0",
     });
   }
+  if (!Object.hasOwn(prepared, "EXACT_REVIEW_INITIAL_PR_QUIET_MS")) {
+    Object.defineProperty(prepared, "EXACT_REVIEW_INITIAL_PR_QUIET_MS", {
+      configurable: true,
+      enumerable: true,
+      writable: true,
+      value: "0",
+    });
+  }
   return prepared;
 }
 
@@ -663,6 +671,7 @@ function completedReviewRun(id: number, itemNumber: number, conclusion: string, 
   const now = Date.now();
   return {
     id,
+    run_attempt: 1,
     name: "Review ClawSweeper items",
     display_title: `Review event item openclaw/openclaw#${itemNumber}`,
     status: "completed",
@@ -675,14 +684,19 @@ function completedReviewRun(id: number, itemNumber: number, conclusion: string, 
 
 async function activePrFetch(input: RequestInfo | URL) {
   const url = String(input);
+  const pathname = new URL(url).pathname;
   if (url.includes("/actions/workflows/repair-cluster-worker.yml/runs")) {
     return jsonResponse({ workflow_runs: [] });
   }
-  if (url.includes("/repos/openclaw/clawsweeper/actions/runs")) {
+  if (/^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(pathname)) {
+    return jsonResponse({ total_count: 0, jobs: [] });
+  }
+  if (pathname === "/repos/openclaw/clawsweeper/actions/runs") {
     return jsonResponse({
       workflow_runs: [
         {
           id: 1,
+          run_attempt: 1,
           name: "ClawSweeper",
           display_title: "Review event item openclaw/openclaw#80609",
           status: "in_progress",
@@ -812,6 +826,7 @@ function createExactReviewAdmissionHarness(
     targetRepository?: (targetRepo: string, init?: RequestInit) => Response | Promise<Response>;
     targetItem?: (targetRepo: string) => Response | Promise<Response>;
     targetPull?: (targetRepo: string) => Response | Promise<Response>;
+    targetPermission?: (targetRepo: string, author: string) => Response | Promise<Response>;
     targetComments?: (
       targetRepo: string,
       itemNumber: number,
@@ -830,6 +845,7 @@ function createExactReviewAdmissionHarness(
       targetRepo: string,
     ) => Promise<HostedPublicTargetProbe | HostedTargetAdmission>;
     env?: Record<string, string>;
+    rawPullResponse?: boolean;
   } = {},
 ) {
   const originalFetch = globalThis.fetch;
@@ -895,11 +911,30 @@ function createExactReviewAdmissionHarness(
     }
     const targetPull = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/);
     if (targetPull) {
-      return (
-        options.targetPull?.(targetPull[1]) ??
+      const response = await (options.targetPull?.(targetPull[1]) ??
         options.targetItem?.(targetPull[1]) ??
-        liveItem(targetPull[1], Number(targetPull[2]), "pull_request")
-      );
+        liveItem(targetPull[1], Number(targetPull[2]), "pull_request"));
+      if (options.rawPullResponse || !response.ok) return response;
+      // Most queue tests only specify the fields under test. Supply the rest
+      // of GitHub's PR shape; malformed-response tests opt out explicitly.
+      return jsonResponse({
+        state: "open",
+        title: "Pull request",
+        body: "",
+        locked: false,
+        labels: [],
+        head: { sha: "a".repeat(40) },
+        base: { sha: "b".repeat(40) },
+        draft: false,
+        updated_at: "2026-09-24T00:00:00Z",
+        ...(await response.json()),
+      });
+    }
+    const targetPermission = url.pathname.match(
+      /^\/repos\/([^/]+\/[^/]+)\/collaborators\/([^/]+)\/permission$/,
+    );
+    if (targetPermission && options.targetPermission) {
+      return options.targetPermission(targetPermission[1]!, targetPermission[2]!);
     }
     const targetComments = url.pathname.match(/^\/repos\/([^/]+\/[^/]+)\/issues\/(\d+)\/comments$/);
     if (targetComments && options.targetComments) {

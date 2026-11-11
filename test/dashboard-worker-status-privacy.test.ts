@@ -142,6 +142,66 @@ test("public status projection is fail-closed for nested identity-bearing metada
   });
 });
 
+test("public status retains bounded producer failure codes through repeated projection", () => {
+  const projected = publicStatusProjection({
+    diagnostics: {
+      errors: [
+        "worker_health_unavailable",
+        "recent_closed_unavailable",
+        "private upstream error https://example.invalid/private",
+      ],
+      error_count: 4,
+    },
+  });
+  const expected = {
+    errors: [
+      "worker_health_unavailable",
+      "recent_closed_unavailable",
+      "telemetry_unavailable",
+      "telemetry_unavailable",
+    ],
+    error_count: 4,
+  };
+  assert.deepEqual(projected.diagnostics, expected);
+  assert.deepEqual(strictPublicStatusProjection(projected).diagnostics, expected);
+  assert.equal(JSON.stringify(projected).includes("example.invalid"), false);
+
+  const bounded = publicStatusProjection({
+    diagnostics: { errors: Array.from({ length: 25 }, () => "events_unavailable") },
+  });
+  assert.equal(bounded.diagnostics.error_count, 20);
+  assert.equal(bounded.diagnostics.errors.length, 20);
+});
+
+test("public status retains only closed failure causes without changing warning counts", () => {
+  const allowed = [
+    "completed_workflow_runs_unavailable:http_403",
+    "completed_workflow_runs_unavailable:http_599",
+    "active_runs_unavailable:census_incomplete",
+    "active_jobs_unavailable:timeout",
+    "worker_health_unavailable:network",
+    "recent_closed_unavailable:rate_limited",
+    "pipeline_unavailable:invalid_json",
+  ];
+  const rejected = [
+    "workflow_runs_unavailable:http_403",
+    "completed_workflow_runs_unavailable:http_200",
+    "completed_workflow_runs_unavailable:http_600",
+    "completed_workflow_runs_unavailable:http_403:private-detail",
+    "pipeline_unavailable:census_incomplete",
+    "worker_health_unavailable:https://example.invalid/private",
+    "private_section:http_403",
+    "completed_workflow_runs_unavailable:" + "x".repeat(1000),
+  ];
+  const projected = publicStatusProjection({ diagnostics: { errors: [...allowed, ...rejected] } });
+  assert.deepEqual(projected.diagnostics, {
+    errors: [...allowed, ...rejected.map(() => "telemetry_unavailable")],
+    error_count: allowed.length + rejected.length,
+  });
+  assert.deepEqual(strictPublicStatusProjection(projected).diagnostics, projected.diagnostics);
+  assert.equal(JSON.stringify(projected).includes("private"), false);
+});
+
 test("public status projection drops over-depth values and retains closed health enums", () => {
   const overDepth = { token: "synthetic-over-depth-token" };
   let nested = overDepth;
@@ -2052,10 +2112,55 @@ test("public queue HTTP route applies the closed projector before serialization"
   assert.equal(serialized.includes("private-owner"), false);
 });
 
+test("public publication handoff exposes only bounded aggregate timing and survives reprojection", () => {
+  const handoff = {
+    observed_at: STATUS_NOW,
+    sample_count: 4,
+    retained_batches: 5,
+    first_claim_at: "2026-07-01T00:00:00.000Z",
+    last_claim_at: "2026-07-01T01:00:00.000Z",
+    dispatch_state: "awaiting_claim",
+    dispatch_wait_seconds: 17,
+    delay_buckets: [
+      { id: "under_1m", count: 1 },
+      { id: "1m_to_5m", count: 1 },
+      { id: "5m_to_10m", count: 1 },
+      { id: "over_10m", count: 1 },
+    ],
+  };
+  const projected = publicExactReviewQueueProjection({
+    publication_handoff: {
+      ...handoff,
+      secret: "private-marker",
+      batches: [{ item_key: "private/item#1" }],
+    },
+  });
+  assert.deepEqual(projected.publication_handoff, handoff);
+  assert.deepEqual(publicExactReviewQueueProjection(projected).publication_handoff, handoff);
+  assert.doesNotMatch(JSON.stringify(projected), /private-marker|private\/item/);
+  for (const patch of [
+    { sample_count: 3 },
+    { retained_batches: 0 },
+    { dispatch_state: "private-marker" },
+    { dispatch_wait_seconds: -1 },
+    { dispatch_state: "idle" },
+    { first_claim_at: "invalid" },
+    { delay_buckets: [{ id: "private-marker", count: 4 }] },
+  ]) {
+    assert.equal(
+      publicExactReviewQueueProjection({ publication_handoff: { ...handoff, ...patch } })
+        .publication_handoff,
+      null,
+    );
+  }
+  assert.equal(publicExactReviewQueueProjection({}).publication_handoff, null);
+});
+
 test("status reprojection keeps the closed runaway alert and only public sample keys", () => {
   const queue = publicExactReviewQueueProjection(
     {
       review_runaway_health: {
+        counting_basis: "claimed_review_runs",
         status: "degraded",
         reason: "review_runaway",
         window_hours: 24,
@@ -2068,6 +2173,7 @@ test("status reprojection keeps the closed runaway alert and only public sample 
     new Set(["openclaw/openclaw"]),
   );
   assert.deepEqual(queue.review_runaway_health, {
+    counting_basis: "claimed_review_runs",
     status: "degraded",
     reason: "review_runaway",
     window_hours: 24,

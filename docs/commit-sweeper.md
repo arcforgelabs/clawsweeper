@@ -3,11 +3,13 @@
 - Status: active local/GitHub-isolated review reference; hosted commit review is
   retired
 - Owner: ClawSweeper maintainers
-- Source of truth: `src/commit-sweeper.ts`, `prompts/review-commit.md`, package
-  scripts, and local-review tests
-- Last verified: `openclaw/clawsweeper@647503ec44b8e777dd172adf974a945367da0d19`
-- Update when: local range selection, network/token isolation, model-service
-  requirements, output artifacts, or the retired hosted boundary changes
+- Source of truth: `src/commit-sweeper.ts`, `src/review-tool-bootstrap.ts`,
+  `scripts/setup-review-tools.mjs`, `prompts/review-commit.md`, package scripts,
+  and local-review tests
+- Last verified: `openclaw/clawsweeper@62e2a1922c4b58c6c10b5ea7282171f7603545b7`
+  (scanner prerequisites only)
+- Update when: local range selection, scanner bootstrap, network/token isolation,
+  model-service requirements, output artifacts, or the retired hosted boundary changes
 
 The hosted commit-review lane (per-commit main reviews, GitHub Checks, and
 commit-finding dispatch) was retired in July 2026 after producing zero
@@ -22,7 +24,8 @@ review engine in `src/commit-sweeper.ts`, used two ways:
 
 Local review first qualifies a trusted TruffleHog executable on the host `PATH`,
 outside the source checkout and ClawSweeper checkout. If it is absent or reports a different release,
-ClawSweeper bootstraps the checksum-pinned 3.97.4 release asset into its
+ClawSweeper bootstraps the checksum-pinned release declared in
+[`src/review-tool-bootstrap.ts`](../src/review-tool-bootstrap.ts) into its
 user-owned cache outside both checkouts before it scans; run
 `pnpm setup:review-tools` to preflight that one-time cache setup. It accepts no
 scanner URL or version override and verifies both the downloaded archive and
@@ -45,8 +48,13 @@ scanner release into the documented local cache before review admission. The
 review requires a clean checkout, uses private run-owned scratch,
 withholds all GitHub token env vars, skips `gh` API commit-metadata hydration,
 points `GH_CONFIG_DIR` at an empty directory, disables Codex web search, and
-forbids other review-time network lookups. Repositories without a configured
-profile are rejected (no foreign-profile fallback). It never writes to GitHub.
+forbids other review-time network lookups. Local repositories need no hosted
+profile or inventory entry: pass `--target-repo owner/repo`, or use the checkout's
+GitHub `origin`. The existing `CLAWSWEEPER_TARGET_REPO` and `TARGET_REPO`
+selectors also apply. Unlisted targets use their own `AGENTS.md`, documentation,
+tests, and Git history rather than another project's policy. Known targets retain
+their repository guidance and metadata. Local profiles have no close authority;
+hosted review and apply admission remain unchanged. It never writes to GitHub.
 Ordinary completion and caught failures remove the run-owned scratch. Signals
 retain their default operating-system termination behavior, so an unhandled
 signal or `SIGKILL` can leave that bounded private scratch behind.

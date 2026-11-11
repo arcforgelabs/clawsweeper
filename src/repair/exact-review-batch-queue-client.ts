@@ -1,7 +1,10 @@
 import { createHmac } from "node:crypto";
 import {
   ExactReviewBatchQueueTransportError,
-  responseErrorCode,
+  ExactReviewBatchQueueRequestError,
+  responseFailureDetails,
+  responseFailureMetadata,
+  type QueueFailureDetails,
   type TransportFailureReason,
 } from "./exact-review-queue-transport-error.js";
 
@@ -515,6 +518,14 @@ export class ExactReviewBatchQueueClient implements ExactReviewBatchQueue {
     };
   }
 
+  async maintainCanonicalBodies(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.postUrl("/internal/exact-review/canonical-bodies/maintenance", input);
+  }
+
+  async compressReadModels(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    return this.postUrl("/internal/exact-review/read-model/compression", input);
+  }
+
   private async post(
     path: string,
     payload: Record<string, unknown>,
@@ -544,6 +555,7 @@ export class ExactReviewBatchQueueClient implements ExactReviewBatchQueue {
       let response: Response | undefined;
       let responseText: string | undefined;
       let errorCode: string | undefined;
+      let details: QueueFailureDetails = {};
       let failure: Error | undefined;
       let reason: TransportFailureReason | undefined;
       try {
@@ -557,13 +569,17 @@ export class ExactReviewBatchQueueClient implements ExactReviewBatchQueue {
           body,
           signal: controller.signal,
         });
+        details = responseFailureMetadata(response);
         if (response.ok) {
           responseText = await response.text();
         } else {
           // Status alone determines retryability, even for plain-text edge errors.
-          errorCode = await responseErrorCode(response);
-          throw new Error(
+          details = await responseFailureDetails(response);
+          errorCode = details.code;
+          throw new ExactReviewBatchQueueRequestError(
+            `HTTP_${response.status}`,
             `Batch queue ${path} failed (HTTP ${response.status})${errorCode ? `: ${errorCode}` : ""}`,
+            details,
           );
         }
       } catch (error) {
@@ -581,6 +597,7 @@ export class ExactReviewBatchQueueClient implements ExactReviewBatchQueue {
         failure = new ExactReviewBatchQueueTransportError(
           reason,
           `Batch queue ${path} failed (${reason.startsWith("HTTP_") ? reason.replace("_", " ") : reason})${errorCode ? `: ${errorCode}` : ""}`,
+          details,
         );
       } finally {
         clearTimeout(timer);
@@ -590,9 +607,20 @@ export class ExactReviewBatchQueueClient implements ExactReviewBatchQueue {
         try {
           parsed = JSON.parse(responseText ?? "");
         } catch {
-          throw new Error(`Batch queue ${path} returned invalid JSON (HTTP ${response!.status})`);
+          throw new ExactReviewBatchQueueRequestError(
+            "invalid_response",
+            `Batch queue ${path} returned invalid JSON (HTTP ${response!.status})`,
+            details,
+          );
         }
-        const result = objectValue(parsed);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new ExactReviewBatchQueueRequestError(
+            "invalid_response",
+            "Invalid batch queue response object",
+            details,
+          );
+        }
+        const result = parsed as Record<string, unknown>;
         if (
           rejectUnscopedRetriedDedupe &&
           attempt > 1 &&

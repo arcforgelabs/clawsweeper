@@ -9,6 +9,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { tmpdir } from "node:os";
@@ -20,7 +21,7 @@ import { ghObservedMutationCommand, ghWithRetry } from "../../dist/clawsweeper-g
 import * as gitHubRuntime from "../../dist/clawsweeper-github-runtime.js";
 import { repositoryProfileFor, withTargetProfile } from "../../dist/repository-profiles.js";
 import { githubTest, installGhFixture } from "../github-runtime-fixture.ts";
-import { runCopyProof } from "../../scripts/e2e/exact-review-selected-tuple-copy.mjs";
+import { runHydrationProof } from "../../scripts/e2e/exact-review-selected-tuple-hydration.mjs";
 import { MAX_MEDIA_PROOF_TIMEOUT_MS } from "../../dist/media-proof-budget.js";
 
 const { gh, ghOnce, ghWithPreparedTimeout, withGitHubRun } = gitHubRuntime;
@@ -172,6 +173,7 @@ test("manual publication proof preserves isolated toolchain settings without inh
     bin: "/fixture/bin",
     root: "/fixture/state",
     transport: "/fixture/transport.mjs",
+    socket: "/fixture/gh.sock",
     baseUrl: "http://127.0.0.1:1",
     secret: "synthetic-coordinator-secret",
     producerRepo: "example/source",
@@ -181,6 +183,7 @@ test("manual publication proof preserves isolated toolchain settings without inh
   for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"] as const)
     assert.equal(env[name], toolchain[name]);
   assert.equal(env.CI, "true");
+  assert.equal(env.MANUAL_PUBLICATION_GITHUB_SOCKET, "/fixture/gh.sock");
   assert.equal(Object.hasOwn(env, "OPENAI_API_KEY"), false);
   assert.equal(Object.hasOwn(env, "GITHUB_TOKEN"), false);
 });
@@ -686,7 +689,7 @@ test("batch workflow signs queue ownership, isolates item failures, and commits 
   assert.doesNotMatch(source, /lifecycle\/command-ack\/attempt/);
   assert.doesNotMatch(source, /repair:update-command-status/);
   assert.match(source, /post-effect --route enqueue --payload/);
-  assert.match(source, /source_drift_requeue/);
+  assert.match(source, /exact-review-queue-request\.ts enqueue source-drift\)/);
   assert.match(source, /state-receipt\.json/);
   assert.match(source, /receipt_outcome/);
   assert.match(source, /"permanent_failure"/);
@@ -767,6 +770,97 @@ test("legacy batch proof reviews use the normal verdict router; failure recovery
   }
 });
 
+test("batch and direct publishers requeue one producer generation under one delivery id", () => {
+  const run =
+    workflow.jobs.publish!.steps.find(
+      (step) => step.name === "Finalize healthy members under a fenced heartbeat",
+    )?.run ?? "";
+  const start = run.indexOf('if [ "$receipt_outcome" = "superseded" ]; then');
+  const end = run.indexOf(
+    'if [ -n "$lifecycle_router_outcome" ] || [ -n "$lifecycle_terminal" ]; then',
+    start,
+  );
+  assert.ok(start >= 0 && end > start);
+  const producerDecision = {
+    targetRepo: "openclaw/openclaw",
+    targetBranch: "main",
+    itemNumber: 710,
+    itemKind: "issue",
+    sourceEvent: "issues",
+    sourceAction: "re_review",
+    supersedesInProgress: false,
+    commandStatusMarker: "<!-- clawsweeper-command-status:710:re_review:command-1 -->",
+    sourceCommentId: 1,
+    sourceCommentUpdatedAt: "2026-10-13T16:32:00Z",
+    commandBodyDigest: "a".repeat(64),
+    commandOrigin: "hosted_webhook",
+    sourceCommentVerified: true,
+  };
+  const member = {
+    itemKey: "openclaw/openclaw#710@publish:7100:1",
+    revision: 3,
+    claimGeneration: 2,
+    decision: {
+      ...producerDecision,
+      sourceAction: "exact_review_artifact_publish",
+      publication: { producerRunId: "7100", producerRunAttempt: 1, producerDecision },
+    },
+  };
+  const root = mkdtempSync(join(tmpdir(), "batch-source-drift-"));
+  try {
+    const outcomePath = join(root, "outcome.json");
+    const capture = join(root, "payload.json");
+    writeFileSync(outcomePath, JSON.stringify({ disposition: { requeueLatestExpected: true } }));
+    const batch = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          'item="$MEMBER"; outcome_path="$OUTCOME_PATH"; outcome_kind=eligible',
+          'receipt_outcome=accepted; source_action=re_review; publication_policy=""',
+          "lifecycle_router_outcome=; lifecycle_terminal=",
+          'pnpm() { cp "$8" "$CAPTURE"; printf \'{"ok":true,"queued":true}\'; }',
+          run.slice(start, end),
+          'printf "%s" "$lifecycle_terminal"',
+        ].join("\n"),
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MEMBER: JSON.stringify(member),
+          OUTCOME_PATH: outcomePath,
+          CAPTURE: capture,
+        },
+      },
+    );
+    assert.equal(batch.status, 0, batch.stderr);
+    assert.equal(batch.stdout, "requeue");
+    // The direct publisher's "Queue fresh review after source drift" body.
+    const direct = spawnSync(
+      "node",
+      ["src/repair/exact-review-queue-request.ts", "enqueue", "source-drift"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          CLAIM_DECISION: JSON.stringify(producerDecision),
+          PRODUCER_RUN_ID: "7100",
+          PRODUCER_RUN_ATTEMPT: "1",
+        },
+      },
+    );
+    assert.equal(direct.status, 0, direct.stderr);
+    const body = JSON.parse(readFileSync(capture, "utf8"));
+    assert.deepEqual(body, JSON.parse(direct.stdout));
+    assert.equal(body.delivery_id, "publisher-source-drift:7100:1");
+    assert.equal(body.decision.sourceAction, "source_drift_requeue");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("batch publisher gives canonical supersession precedence over artifact terminal plans", () => {
   const healthyMembers = workflow.jobs.publish!.steps.find(
     (step) => step.name === "Finalize healthy members under a fenced heartbeat",
@@ -844,21 +938,29 @@ test("batch workflow uses owner-scoped mutation credentials and canonical Worker
   assert.match(source, /repositories: \$\{\{ steps\.batch\.outputs\.target_repositories \}\}/);
   assert.doesNotMatch(source, /uses: \.\/\.github\/actions\/create-state-token/);
   assert.match(source, /uses: \.\/\.github\/actions\/setup-state/);
-  assert.match(source, /records-repo-slugs: \$\{\{ steps\.batch\.outputs\.records_repo_slugs \}\}/);
+  assert.doesNotMatch(source, /records-(url|secret|repo-slugs):/);
+  assert.match(source, /hydrate-records: "false"/);
   assert.match(source, /hydrate-git-state: "false"/);
   assert.match(source, /hydrate-state-blobs: "false"/);
   assert.doesNotMatch(source, /permissions:\n(?:.*\n)*?\s+issues: write/);
 });
 
-test("batch preparation copies only canonical selected tuples and preserves publisher bases", () => {
-  const proof = runCopyProof();
-  assert.equal(proof.copiedFiles, 12);
+test("batch preparation hydrates only canonical selected tuples and preserves publisher bases", () => {
+  const proof = runHydrationProof();
+  assert.equal(proof.hydratedFiles, 12);
   assert.equal(proof.publisherCount, 8);
 });
 
-for (const mode of ["missing-source", "file-source", "heartbeat", "circuit"]) {
+for (const mode of [
+  "file-source",
+  "heartbeat",
+  "circuit",
+  "forbidden",
+  "corrupt",
+  "read-timeout",
+]) {
   test(`batch preparation retains ${mode} no-mutation outcomes`, () => {
-    runCopyProof({ mode, unrelatedRecords: 0 });
+    runHydrationProof({ mode, unrelatedRecords: 0 });
   });
 }
 
@@ -872,7 +974,7 @@ for (const invalidDecision of [
   { itemNumber: Number.MAX_SAFE_INTEGER + 1 },
 ]) {
   test(`batch preparation rejects ${JSON.stringify(invalidDecision)} before canonical reads`, () => {
-    runCopyProof({ mode: "copy", unrelatedRecords: 0, invalidDecision });
+    runHydrationProof({ mode: "artifact-unavailable", unrelatedRecords: 0, invalidDecision });
   });
 }
 

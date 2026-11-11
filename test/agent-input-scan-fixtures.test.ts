@@ -13,6 +13,34 @@ import {
   type StagedScanInput,
 } from "../dist/agent-input-scan-fixtures.js";
 
+test("custom endpoint URI qualification stays native-identity and source-line bound", () => {
+  const source = readFileSync(
+    new URL("../src/agent-input-scan-fixtures.ts", import.meta.url),
+    "utf8",
+  );
+  const declaration = source.match(/const REVIEWED_ATTRIBUTIONS:[^\n]* = \[([\s\S]*?)\n\];/);
+  assert.ok(declaration);
+  const matching = declaration[1]!
+    .split("\n")
+    .filter((line) =>
+      line.includes("7efab902442b7a5718ca6037293710b1651a072ea24f11da9c6a9a5cadfb5fc3"),
+    )
+    .map((line) => JSON.parse(line.trim().replace(/,$/, "")) as ReviewedAttribution);
+  assert.deepEqual(
+    matching,
+    ["PLAIN", "HTML"].map((decoder) => [
+      17,
+      "URI",
+      decoder,
+      "597eab0f9f33f6ee623768b183c5e349f6b5e94f4760d5e846c2e77fd193f977",
+      "7efab902442b7a5718ca6037293710b1651a072ea24f11da9c6a9a5cadfb5fc3",
+      "6532ea82ef6d753e323297804484e534857b597d5d82d161a1f14ab6ed606672",
+      "src/gateway/server-methods/config-custom-endpoint.test.ts",
+      "100644",
+    ]),
+  );
+});
+
 test("host-owned reviewed attribution policy is valid and has no duplicate rows", () => {
   assert.doesNotThrow(validateReviewedAttributionPolicy);
 });
@@ -260,7 +288,7 @@ function fixturePatch(
               level: "info-0",
               logger: "trufflehog",
               msg: "finished scanning",
-              trufflehog_version: "3.97.4",
+              trufflehog_version: "3.99.4",
               chunks: 1,
               bytes: content.length,
               verified_secrets: findings.filter((finding) => finding.Verified === true).length,
@@ -334,64 +362,81 @@ function questionPromptFixture(): ReturnType<typeof autoreviewFixtures>[number] 
   return { raw, rawV2, line: `    "${rawV2}-in",`, decoders: ["PLAIN", "HTML"] };
 }
 
-const questionPromptSource = "ui/src/app/question-prompt.test.ts";
-
-for (const change of ["add", "remove", "context"] as const) {
-  test(`question URL rejection fixture admits exact Git-generated ${change} attribution`, (t) => {
-    const patch = fixturePatch(t, questionPromptSource, [questionPromptFixture()], change);
-    for (const decoder of ["PLAIN", "HTML"] as const) {
-      const result = patch.classify(decoder);
-      assert.equal(result.kind, "classified", JSON.stringify(result));
-      if (result.kind !== "classified") continue;
-      assert.ok(result.notices.every((notice) => notice.source === questionPromptSource));
-      const findings = result.notices.flatMap((notice) => notice.findings);
-      assert.ok(findings.some((finding) => finding.patch));
-      assert.ok(findings.every((finding) => finding.decoder === decoder));
-      if (change === "context") {
-        assert.ok(findings.some((finding) => finding.role === "base"));
-        assert.ok(findings.some((finding) => finding.role === "head"));
-      } else {
-        assert.ok(findings.every((finding) => finding.role === patch.role));
-      }
-    }
-  });
+function websiteFixture(): ReturnType<typeof autoreviewFixtures>[number] {
+  const raw = ["https://:", "example-password", "@", "status.example"].join("");
+  return {
+    raw,
+    rawV2: raw,
+    line: `    { name: "password-only", url: "${raw}/" },`,
+    decoders: ["PLAIN"],
+  };
 }
 
-for (const variant of ["literal", "line", "path", "mode", "verified", "decoder"] as const) {
-  test(`question URL rejection fixture still refuses changed ${variant}`, (t) => {
-    const entry = questionPromptFixture();
-    if (variant === "literal") {
-      entry.raw = entry.raw.replace("password", "passwore");
-      entry.rawV2 = entry.rawV2!.replace("password", "passwore");
-      entry.line = entry.line.replace("password", "passwore");
-    } else if (variant === "line") {
-      entry.line += " ";
-    }
-    const patch = fixturePatch(
-      t,
-      variant === "path" ? "ui/src/app/another-question.test.ts" : questionPromptSource,
-      [entry],
-    );
-    if (variant === "mode") {
-      for (const [file, input] of patch.inputs) {
-        if (input.kind === "blob") {
-          patch.inputs.set(file, {
-            ...input,
-            references: input.references.map((reference) => ({ ...reference, mode: "100755" })),
-          });
+for (const { name, source, makeFixture } of [
+  {
+    name: "question",
+    source: "ui/src/app/question-prompt.test.ts",
+    makeFixture: questionPromptFixture,
+  },
+  {
+    name: "website",
+    source: "ui/src/lib/board/widgets/website.test.ts",
+    makeFixture: websiteFixture,
+  },
+]) {
+  for (const change of ["add", "remove", "context"] as const) {
+    test(`${name} URL rejection fixture admits exact Git-generated ${change} attribution`, (t) => {
+      const patch = fixturePatch(t, source, [makeFixture()], change);
+      for (const decoder of makeFixture().decoders) {
+        const result = patch.classify(decoder);
+        assert.equal(result.kind, "classified", JSON.stringify(result));
+        if (result.kind !== "classified") continue;
+        assert.ok(result.notices.every((notice) => notice.source === source));
+        const findings = result.notices.flatMap((notice) => notice.findings);
+        assert.ok(findings.some((finding) => finding.patch));
+        assert.ok(findings.every((finding) => finding.decoder === decoder));
+        if (change === "context") {
+          assert.ok(findings.some((finding) => finding.role === "base"));
+          assert.ok(findings.some((finding) => finding.role === "head"));
+        } else {
+          assert.ok(findings.every((finding) => finding.role === patch.role));
         }
       }
-    }
-    const result = patch.classify(
-      "HTML",
-      variant === "verified"
-        ? { Verified: true }
-        : variant === "decoder"
-          ? { DecoderName: "BASE64" }
-          : {},
-    );
-    assert.equal(result.kind, "refused", JSON.stringify(result));
-  });
+    });
+  }
+
+  for (const variant of ["literal", "line", "path", "mode", "verified", "decoder"] as const) {
+    test(`${name} URL rejection fixture still refuses changed ${variant}`, (t) => {
+      const entry = makeFixture();
+      if (variant === "literal") {
+        entry.raw = entry.raw.replace("password", "passwore");
+        entry.rawV2 = entry.rawV2!.replace("password", "passwore");
+        entry.line = entry.line.replace("password", "passwore");
+      } else if (variant === "line") {
+        entry.line += " ";
+      }
+      const patch = fixturePatch(t, variant === "path" ? `${source}.other` : source, [entry]);
+      if (variant === "mode") {
+        for (const [file, input] of patch.inputs) {
+          if (input.kind === "blob") {
+            patch.inputs.set(file, {
+              ...input,
+              references: input.references.map((reference) => ({ ...reference, mode: "100755" })),
+            });
+          }
+        }
+      }
+      const result = patch.classify(
+        entry.decoders.at(-1)!,
+        variant === "verified"
+          ? { Verified: true }
+          : variant === "decoder"
+            ? { DecoderName: name === "website" ? "HTML" : "BASE64" }
+            : {},
+      );
+      assert.equal(result.kind, "refused", JSON.stringify(result));
+    });
+  }
 }
 
 function readinessPrivacyFixture(): ReturnType<typeof autoreviewFixtures>[number] {
@@ -639,7 +684,7 @@ function githubCheckLinkFixture(): ReturnType<typeof autoreviewFixtures>[number]
   return { raw, rawV2, line: '    "' + rawV2 + '",', decoders: ["PLAIN", "HTML"] };
 }
 
-function browserSessionFixture(): ReturnType<typeof autoreviewFixtures>[number] {
+function browserSessionFixture(variable = "cdpUrl"): ReturnType<typeof autoreviewFixtures>[number] {
   const raw = [
     "https://",
     "browser-user",
@@ -649,7 +694,18 @@ function browserSessionFixture(): ReturnType<typeof autoreviewFixtures>[number] 
     "browserless.example",
   ].join("");
   const rawV2 = raw + "/cdp";
-  return { raw, rawV2, line: '    const cdpUrl = "' + rawV2 + '";', decoders: ["PLAIN", "HTML"] };
+  return {
+    raw,
+    rawV2,
+    line: "    const " + variable + ' = "' + rawV2 + '";',
+    decoders: ["PLAIN", "HTML"],
+  };
+}
+
+function updateFailureReportFixture(): ReturnType<typeof autoreviewFixtures>[number] {
+  const raw = ["https://", "user", ":", "password", "@", "private.example"].join("");
+  const rawV2 = raw + "/config";
+  return { raw, rawV2, line: '  "' + rawV2 + '",', decoders: ["PLAIN", "HTML"] };
 }
 
 function exactUriFixtureTests(
@@ -1429,9 +1485,61 @@ exactUriFixtureTests(
   githubCheckLinkFixture,
 );
 exactUriFixtureTests(
+  "GitHub check-link reformatted",
+  "extensions/github/src/detail-checks.test.ts",
+  () => {
+    const raw = ["https://", "user", ":", "password", "@", "ci.example.com"].join("");
+    const rawV2 = raw + "/log";
+    return {
+      raw,
+      rawV2,
+      line: '  it.each(["http://ci.example.com/log", "' + rawV2 + '"])(',
+      decoders: ["PLAIN", "HTML"],
+    };
+  },
+);
+exactUriFixtureTests(
+  "GitHub detail truncated upstream URL",
+  "extensions/github/src/detail.test.ts",
+  () => {
+    const raw = ["https://", "user", ":", "password", "@", "api.github.com"].join("");
+    return {
+      raw,
+      // The native PLAIN match stops at 45 bytes while the line holds the full URL.
+      rawV2: raw + "/repos/oc",
+      line: '    "' + raw + '/repos/octocat/repo",',
+      decoders: ["PLAIN", "HTML"],
+    };
+  },
+);
+exactUriFixtureTests(
+  "GitHub detail full upstream URL",
+  "extensions/github/src/detail.test.ts",
+  () => {
+    const raw = ["https://", "user", ":", "password", "@", "api.github.com"].join("");
+    const rawV2 = raw + "/repos/octocat/repo";
+    return { raw, rawV2, line: '    "' + rawV2 + '",', decoders: ["PLAIN", "HTML"] };
+  },
+);
+exactUriFixtureTests("GitHub detail steal-link", "extensions/github/src/detail.test.ts", () => {
+  const raw = ["https://", "user", ":", "secret", "@", "github.com"].join("");
+  const rawV2 = raw + "/owner/repo";
+  return {
+    raw,
+    rawV2,
+    line: '  it.each(["https://example.com/steal", "' + rawV2 + '"])(',
+    decoders: ["PLAIN", "HTML"],
+  };
+});
+exactUriFixtureTests(
   "browser session",
   "extensions/browser/src/browser/pw-session.connections.test.ts",
-  browserSessionFixture,
+  () => browserSessionFixture(),
+);
+exactUriFixtureTests(
+  "renamed browser session",
+  "extensions/browser/src/browser/pw-session.connections.test.ts",
+  () => browserSessionFixture("endpoint"),
 );
 
 exactUriFixtureTests(
@@ -1647,7 +1755,7 @@ for (const [index, entry] of crabboxConfigFixtures.entries()) {
                 level: "info-0",
                 logger: "trufflehog",
                 msg: "finished scanning",
-                trufflehog_version: "3.97.4",
+                trufflehog_version: "3.99.4",
                 chunks: 1,
                 bytes: bytes.length,
                 verified_secrets: findings.filter((value) => value.Verified).length,
@@ -1821,7 +1929,7 @@ test("logging redaction fixtures bind native decoders to exact source bytes acro
               level: "info-0",
               logger: "trufflehog",
               msg: "finished scanning",
-              trufflehog_version: "3.97.4",
+              trufflehog_version: "3.99.4",
               chunks: 1,
               bytes: bytes.length,
               verified_secrets: observed.filter((finding) => finding.Verified).length,
@@ -2096,3 +2204,9 @@ for (const config of [false, true]) {
     });
   }
 }
+
+exactUriFixtureTests(
+  "update failure report",
+  "src/infra/update-failure-report-config.test.ts",
+  updateFailureReportFixture,
+);

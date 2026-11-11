@@ -1,3 +1,4 @@
+import { decodeStoredJson, encodeStoredJson } from "../dashboard/stored-json.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -5,6 +6,58 @@ import {
   type LifecycleProducerLineage,
 } from "../dashboard/exact-review-lifecycle.ts";
 import { TestStorage } from "./exact-review-test-storage.ts";
+import { MemoryDurableStorage } from "./dashboard-worker-harness.ts";
+import { ExactReviewLifecycleTelemetryStore } from "../dashboard/exact-review-lifecycle-telemetry.ts";
+
+test("retired Bay storage is removed without changing durable lifecycle facts on restart", () => {
+  const f = producerJourneyFixture();
+  const before = f.lifecycle.read(f.producer.canonicalTargetKey, f.producer.fenceKey, 2);
+  f.storage.exec(`
+    ALTER TABLE exact_review_lifecycle_projection_v1 ADD COLUMN bay_telemetry_pending INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX exact_review_lifecycle_projection_bay_telemetry_pending
+      ON exact_review_lifecycle_projection_v1 (bay_telemetry_pending);
+  `);
+  const retiredTables = [
+    "exact_review_lifecycle_bay_event_v2",
+    "exact_review_lifecycle_bay_meta_v2",
+    "exact_review_lifecycle_bay_scope_v2",
+    "exact_review_lifecycle_bay_tide_buffer_v2",
+    "exact_review_lifecycle_bay_pending_v2",
+    "exact_review_command_bay_journeys",
+  ];
+  for (const table of retiredTables) {
+    f.storage.exec(
+      `CREATE TABLE ${table} (legacy_value TEXT); INSERT INTO ${table} VALUES ('old')`,
+    );
+  }
+  for (let restart = 0; restart < 2; restart++) {
+    const lifecycle = new ExactReviewLifecycleProjectionStore(f.storage);
+    const version = f.storage.scalar("SELECT schema_version AS value FROM pragma_schema_version");
+    lifecycle.ensureSchemaSync();
+    new ExactReviewLifecycleTelemetryStore(f.storage).ensureSchemaSync();
+    assert.deepEqual(lifecycle.read(f.producer.canonicalTargetKey, f.producer.fenceKey, 2), before);
+    assert.equal(lifecycle.maxRevision(f.producer.canonicalTargetKey), 2);
+    assert.equal(f.cards(lifecycle).length, 2);
+    for (const table of retiredTables) {
+      assert.equal(
+        f.storage.scalar(`SELECT COUNT(*) AS value FROM sqlite_master WHERE name = '${table}'`),
+        0,
+      );
+    }
+    assert.equal(
+      f.storage.scalar(
+        "SELECT COUNT(*) AS value FROM pragma_table_info('exact_review_lifecycle_projection_v1') WHERE name = 'bay_telemetry_pending'",
+      ),
+      1,
+    );
+    if (restart === 1) {
+      assert.equal(
+        f.storage.scalar("SELECT schema_version AS value FROM pragma_schema_version"),
+        version,
+      );
+    }
+  }
+});
 
 function producerJourneyFixture() {
   const storage = new TestStorage();
@@ -109,7 +162,6 @@ test("linked producer2/publication1 survives reconstruction and never completes 
   assert.equal(current[0]!.state, "completed");
   assert.deepEqual(current[0]!.facts, {
     admission: "recorded",
-    inline_proof: "unknown",
     claim_count: 0,
     review_result: "completed",
     github_effect_recorded: true,
@@ -154,8 +206,16 @@ test("historical lifecycle metadata preserves canonical facts and idempotent adm
   const f = producerJourneyFixture();
   const expected = f.lifecycle.read(f.producer.canonicalTargetKey, f.producer.fenceKey, 2)!;
   for (const metadata of [
-    { bayTelemetryPending: true, bayTelemetryEventId: "historical-event" },
-    { bayTelemetryPending: "legacy", bayTelemetryEventId: { retired: true } },
+    {
+      bayTelemetryPending: true,
+      bayTelemetryEventId: "historical-event",
+      inlineProof: { requested: true, firstRequestedAt: 10 },
+    },
+    {
+      bayTelemetryPending: "legacy",
+      bayTelemetryEventId: { retired: true },
+      inlineProof: "legacy",
+    },
   ]) {
     f.storage.run(
       `UPDATE exact_review_lifecycle_projection_v1 SET projection_json = ?
@@ -304,8 +364,17 @@ test("unlinked higher publication counter cannot mask the canonical producer cur
   );
   assert.equal(cards.find((card) => card.revision === 50)!.state, "completed");
 
+  const row = [
+    ...f.storage.sql.exec(
+      "SELECT projection_json FROM exact_review_lifecycle_projection_v1 WHERE fence_key = ?",
+      legacy.fenceKey,
+    ),
+  ][0]!;
+  const malformed = JSON.parse(decodeStoredJson(String(row.projection_json)));
+  malformed.producerLineage = null;
   f.storage.run(
-    "UPDATE exact_review_lifecycle_projection_v1 SET projection_json = json_set(projection_json, '$.producerLineage', json('null')) WHERE fence_key = ?",
+    "UPDATE exact_review_lifecycle_projection_v1 SET projection_json = ? WHERE fence_key = ?",
+    encodeStoredJson(JSON.stringify(malformed)),
     legacy.fenceKey,
   );
   assert.equal(f.lifecycle.createAuditInventorySnapshot(100).collection.state, "unknown");
@@ -333,4 +402,37 @@ test("standalone legacy fence remains observable but competing fence families ha
     f.cards().filter((card) => card.current_revision),
     [],
   );
+});
+
+test("retired JSON indexes are removed while current identity lookups stay indexed", () => {
+  const storage = new MemoryDurableStorage();
+  new ExactReviewLifecycleProjectionStore(storage).ensureSchemaSync();
+  for (const name of [
+    "exact_review_lifecycle_projection_producer_lineage_v1",
+    "exact_review_lifecycle_projection_malformed_target_v1",
+  ]) {
+    storage.sql.exec(
+      `CREATE INDEX ${name} ON exact_review_lifecycle_projection_v1(canonical_target_key)`,
+    );
+  }
+  new ExactReviewLifecycleProjectionStore(storage).ensureSchemaSync();
+  const indexes = Array.from(
+    storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'index'"),
+  );
+  assert.ok(
+    !indexes.some(
+      (row) =>
+        String(row.name).includes("producer_lineage_v1") ||
+        String(row.name).includes("malformed_target_v1"),
+    ),
+  );
+  const plan = Array.from(
+    storage.sql.exec(
+      "EXPLAIN QUERY PLAN SELECT projection_json FROM exact_review_lifecycle_projection_v1 WHERE canonical_target_key = ? AND fence_key = ? AND revision = ?",
+      "openclaw/openclaw#1",
+      "fence",
+      1,
+    ),
+  );
+  assert.match(plan.map((row) => row.detail).join(" "), /SEARCH.*INDEX/);
 });

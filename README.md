@@ -36,8 +36,6 @@ At a high level ClawSweeper:
 - reviews open issues and pull requests on a schedule and on exact GitHub events
 - writes one durable markdown report per item in generated state
 - syncs one marker-backed public review comment per issue or PR, edited in place
-- can request relevant Web UI or Telegram proof within an eligible OpenClaw PR
-  review and evaluate results in that same turn; see [live proof](docs/live-proof.md)
 - closes only unchanged, high-confidence, policy-allowed proposals
 - routes maintainer commands `@clawsweeper review`, `@clawsweeper re-review`,
   `@clawsweeper explain`, and `@clawsweeper stop`
@@ -48,7 +46,6 @@ At a high level ClawSweeper:
 - publishes canonical review records to the Cloudflare Worker, action ledgers
   and assets to R2, and the remaining operational state to
   `openclaw/clawsweeper-state`
-
 
 The [oversized PR close lane](docs/oversized-pr-close-policy.md) proposes closing
 pull requests above 50,000 changed lines before hydration, scanning, or model
@@ -64,7 +61,7 @@ mutation is rechecked against live target state immediately before it happens.
 ### Issue and PR Reviews
 
 Scheduled runs scan open issues and pull requests, while target repositories can
-forward exact issue/PR events with `repository_dispatch` for low-latency
+forward exact issue/PR events through keyless OIDC Worker intake for low-latency
 one-item reviews. Each review writes
 `records/<repo-slug>/items/<number>.md` with the decision, evidence, proposed
 maintainer-facing comment, runtime metadata, and GitHub snapshot hash.
@@ -188,13 +185,18 @@ are intentionally stricter: they review issues and PRs, but apply may close only
 PRs where current `main` already implements the proposed change with
 source-backed evidence.
 
-Maintainer-authored issues and PRs, and items labeled `maintainer`, are excluded
-from automatic reviews and scheduled sweeps. One opening/ready reminder explains
-how to opt in. Only request `@clawsweeper review` when a review is needed and the
+Maintainer-authored issues and PRs, and items labeled `maintainer`, created from
+2026-10-15 03:50 UTC are reviewed like everyone else's: a PR gets one automatic
+review and later reviews need a request; an issue follows the ordinary issue
+cadence. Older maintainer items stay excluded from automatic reviews and
+scheduled sweeps, and got one opening/ready reminder explaining how to opt in.
+Only request `@clawsweeper review` when a review is needed and the
 work and validation are complete; agents must not request reviews automatically
 or repeat requests while one is queued or running. A one-off request does not
-opt future pushes into reviews. Existing `clawsweeper:autofix` and
-`clawsweeper:automerge` labels retain their explicit opt-in behavior.
+opt future pushes into reviews, but it stays open until it is answered: if the
+item changes while it is reviewed, ClawSweeper re-reviews and still answers that
+request. The retired `clawsweeper:autofix` and `clawsweeper:automerge` labels no
+longer change review admission; they still protect an item from close proposals.
 
 ## Maintainer Commands
 
@@ -209,6 +211,9 @@ The canonical comment commands are:
 
 `review` and `re-review` request a fresh read-only issue/PR review; `explain`
 summarizes the current result, and `stop` prevents further automatic handling.
+Stop adds `clawsweeper:human-review` before it removes repair-loop protection
+labels. A failed label write fails the command without a reply, and a later run
+retries it.
 The router checks repository permissions and the command's current source
 comment before accepting work. Contributors may request a review of their own
 items under the configured authorization policy.
@@ -217,7 +222,6 @@ The GitHub App webhook durably records eligible review comment versions before
 acknowledging them. Exact item work is coalesced and leased by the Worker, so a
 webhook burst does not create capacity-waiting Actions runners. Repair, autofix,
 automerge, issue implementation, fix-ci, and address-review commands are retired.
-
 
 ## Dashboard
 
@@ -240,7 +244,6 @@ requests that are blocked on real behavior proof labels, including missing
 proof, supplied-but-not-sufficient proof, mock-only proof, and proof label
 mismatches. See
 [`docs/pr-proof-triage-dashboard.md`](docs/pr-proof-triage-dashboard.md).
-
 
 The default-off unconfirmed product-direction policy can propose closure for a
 strictly bounded class of technically correct, well-proven external feature PRs
@@ -272,8 +275,8 @@ scheduling, capacity, and monitoring behavior is documented in
 
 - hot/new and recently active items are checked hourly, with a 5-minute intake
   schedule for the newest queue edge
-- target repositories can forward issue and PR events with
-  `repository_dispatch`; those exact item runs use a dedicated single job to
+- target repositories can forward issue and PR events through OIDC Worker intake;
+  the queue leases a dedicated executor to
   review one item, sync the durable comment, and apply only safe close
   proposals for that same item
 - pull requests and issues younger than 30 days are checked daily once they
@@ -418,8 +421,12 @@ Clean text-converted checkouts retain both canonical Git and raw working bytes
 in scan coverage. The host never starts a target-bundled autoreview helper or
 second reviewer.
 
-Hosted Codex and OpenClaw setup share the checksum-pinned TruffleHog 3.97.4
-installer in `.github/actions/setup-review-tools/install.sh`. For local review,
+Hosted Codex and OpenClaw setup share `.github/actions/setup-review-tools`, which
+caches only the checksum-pinned release archive. Every setup verifies its bytes,
+extracts a fresh private binary, checks the exact version, and runs the benign
+scan before advertising its path. Cache misses and corrupt archives use the
+pinned download; installed binaries and review data never enter the Actions
+cache. For local review,
 ClawSweeper first qualifies a trusted host executable outside both checkouts; when it
 is absent or reports a different TruffleHog release, it bootstraps the exact checksum-pinned release asset into a
 user-owned cache outside both checkouts. The local bootstrap accepts no URL or
@@ -430,6 +437,10 @@ review. The scan stages at most 256 MiB in private external temporary files and
 uses the remaining review deadline; it never silently truncates or bypasses.
 Diagnostics omit scanner output and source values. Restore prerequisites or
 remove sensitive input before retrying a refusal.
+Managed scanner setup failures also emit one bounded stderr diagnostic with a
+fixed phase and category, and the observed HTTP status when a download is
+rejected. Raw network errors, response bodies, and local paths remain omitted;
+the review still refuses with `scanner_unavailable` before starting a provider.
 Exact-review failure manifests distinguish a native output/scan-contract failure
 from an unclassified finding. The latter records the first blocking finding's
 bounded detector metadata and host-staged material identity: prompt, schema,
@@ -564,6 +575,13 @@ regular-file mode, and every committed base/head reference must match. Other
 decoders and changed source lines remain blocking; the WebSocket fixture has
 no qualification because the pinned scanner did not emit a finding for it.
 
+The website widget's password-only URL rejection fixture in
+`ui/src/lib/board/widgets/website.test.ts` qualifies only for its observed URI
+detector 17 `PLAIN` finding. Both raw-value digests, the complete source line,
+original path, regular-file mode, and committed base/head references must match.
+The username-only fixture has no qualification because the pinned scanner did
+not report it. See [the native before/after proof](docs/proof/website-url-fixture/README.md).
+
 The TypeSafe local-transport URL-rejection fixture in
 `extensions/typesafe/src/local.transport.test.ts` binds its exact URI detector 17
 identities, full source line, regular-file mode, and committed base/head references.
@@ -576,6 +594,20 @@ The native-worker endpoint and startup-config rejection fixtures in
 qualify only through their exact URI-17 PLAIN/HTML attribution, both value
 digests, complete source lines, regular-file mode and committed source references.
 No whole test file is exempt. See [the native source-admission proof](docs/proof/native-worker-fixtures/README.md).
+
+The password-free OCE JDBC configuration fixture has an exact attribution limited
+to its two reviewed source blobs and observed PLAIN finding. Complete literal,
+source-line and source hashes, native metadata, and committed provenance must
+match; other JDBC findings remain blocking. See the
+[native capture and replay proof](docs/proof/oce-jdbc-fixture/README.md).
+
+The OpenClaw Enterprise sign-in chart parity test has two URL-rejection fixtures
+qualified only in their two inspected complete source blobs. Each tuple binds the
+exact URI hashes, complete source line, regular-file path and mode, and PLAIN or
+ESCAPED_UNICODE decoding. Both fixtures qualify through either decoder in the
+base and head blobs. Each of the eight fixture/blob/decoder combinations has a
+native observation. Other blobs and decoders remain blocked. See the
+[native capture and classifier proof](docs/proof/oce-sign-in-fixtures/README.md).
 
 One source path may contain multiple independently reviewed fixtures; each
 digest/path/mode tuple must match exactly, so source membership alone never
@@ -608,6 +640,13 @@ The create-profile response-redaction fixture in OpenClaw's
 URI identity, complete source line, regular-file mode, and committed base/head
 references. Native 3.97.4 scans observed only `PLAIN` and `HTML` attribution;
 the policy accepts those two variants.
+
+The existing-session profile-status fixture in
+`extensions/browser/src/browser/server-context.existing-session.test.ts` binds
+its synthetic loopback CDP URI to both complete source lines in order, exact
+raw digests, committed base/head references, and regular-file mode. Only the
+native-observed PLAIN and HTML URI-17 variants qualify. See
+[the native before/after proof](docs/proof/existing-session-cdp-fixture/README.md).
 
 The plugin settings redaction fixtures in OpenClaw's
 `ui/src/pages/custodian/custodian-session-store.test.ts` and
@@ -683,8 +722,10 @@ or unqualified patch material remain blocking, as do other findings, verified
 findings, and incomplete scans. Unverified findings alone never qualify: every finding must
 match the exact bytes, source association, and strict detector contract. This
 classification does not expand TruffleHog's detection coverage.
-The classification is pinned to TruffleHog 3.97.4's output contract; scanner
-upgrades require requalification. See `src/agent-input-scan-fixtures.ts`.
+The classification follows the output contract of the
+[checksum-pinned TruffleHog release](src/review-tool-bootstrap.ts); scanner
+upgrades require requalification. Historical native proof records name the scanner
+version used for each observation. See `src/agent-input-scan-fixtures.ts`.
 After successful cleanup and final source fences, each accepted fixture/source
 pair emits a host-side structured stderr notice with `event`, `fixtureSha256`,
 `source`, `detector`, and `findings` entries containing `blob`, `decoder`, and
@@ -816,9 +857,14 @@ usage is documented in
 
 ```bash
 codex login --device-auth -c 'service_tier="fast"'
-pnpm run codex:local:check
+pnpm run codex:local:check -- --diagnostics
 pnpm run review -- --local-only --target-repo owner/name --item-number 123
 ```
+
+`--diagnostics` checks the selected Codex binary and its login status without a
+model request. It does not prove model access or review readiness. Omit
+`--diagnostics` to also run the existing model smoke test, which consumes model
+usage.
 
 `review` is the single issue/PR review command. `--local-only` makes it an
 advisory local run: it skips the review-start placeholder comment, defaults the
@@ -880,9 +926,31 @@ pnpm run review -- --local-range \
   --base origin/main
 ```
 
+The built source checkout also provides a local-only entrypoint:
+
+```bash
+node dist/clawsweeper-local.js review --target-repo openclaw/clawsweeper --base origin/main
+node dist/clawsweeper-local.js --help
+node dist/clawsweeper-local.js --version
+```
+
+Both range commands use the same review engine, scanner, reports, history and
+output cleanup. The local entrypoint loads that engine only when review starts;
+help and version do not invoke Codex. Hosted admission, leases, action-ledger
+publication and cache metrics stay in the hosted command. This is a source
+checkout entrypoint, not an installable package. Diagnostics integration remains
+separate; `codex:local:check` still invokes its existing model smoke test.
+
 Without `--target-dir`, `--local-range` reviews the checkout where the command
 was invoked. Pass `--target-dir <path>` when invoking ClawSweeper from a
-different checkout. The range is `merge-base(<base>, HEAD)..HEAD`, includes
+different checkout. Local range review accepts unlisted and private repositories
+without central registration. `--target-repo owner/repo` overrides the existing
+`CLAWSWEEPER_TARGET_REPO` / `TARGET_REPO` selectors; otherwise the checkout's
+GitHub `origin` supplies its identity. For a checkout without a GitHub origin,
+pass `--target-repo` explicitly. Unlisted targets use their own `AGENTS.md`, docs,
+tests, and Git history; known targets retain their full repository guidance.
+Local profiles have empty close rules and do not enroll targets in hosted review
+or apply. The range is `merge-base(<base>, HEAD)..HEAD`, includes
 committed work only, and refuses a dirty working tree. `--body-file` can supply
 the proposed PR body and `--additional-policy` can layer an extra local policy.
 
@@ -1000,10 +1068,11 @@ lane-specific exceptions.
 
 Target repositories can opt into event-level latency by installing the
 dispatcher workflow in [docs/target-dispatcher.md](docs/target-dispatcher.md).
-The dispatcher sends `repository_dispatch` events to this repository with the
-target repo and exact item number; ClawSweeper then runs one event job that
+The keyless dispatcher sends the target repo and exact item number to the Worker
+using GitHub Actions OIDC; ClawSweeper then leases one event executor that
 reviews, comments, and checks immediate safe apply instead of waiting for the
-next hot-intake cron or bulk publish lane.
+next hot-intake cron or bulk publish lane. The independent App webhook remains
+enabled; legacy `repository_dispatch` receivers remain during migration.
 
 ## Checks
 
@@ -1089,7 +1158,6 @@ Required `clawsweeper` app permissions:
 - Checks: read/write on target repositories, for structural cache state and
   commit Check Run publication.
 - Commit statuses: read on target repositories, for structural cache state.
-
 
 ClawSweeper no longer falls back to PAT-based write tokens. If the GitHub App
 installation does not grant the requested permission set, the workflow fails at

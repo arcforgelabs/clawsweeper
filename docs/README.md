@@ -21,10 +21,11 @@ manual.
 | Set up a development checkout                       | [Contributing](../CONTRIBUTING.md)            | [Local run](../README.md#local-run)                 |
 | Understand review and scheduling                    | [Scheduler](scheduler.md)                     | [Automation limits](limits.md)                      |
 | Add or operate a target repository                  | [Target repositories](target-repositories.md) | [Target dispatcher](target-dispatcher.md)           |
-| Inspect production without mutation                 | [Live dashboard](live-dashboard.md)           | [Public observer API](public-api.md)               |
+| Inspect production without mutation                 | [Live dashboard](live-dashboard.md)           | [Public observer API](public-api.md)                |
 | Inspect observer routes and configuration ownership | [Public observer API](public-api.md)          | [Operator configuration](operator-configuration.md) |
 | Prepare proof for a change                          | [Contributing](../CONTRIBUTING.md)            | [Agent instructions](../AGENTS.md)                  |
 | Review a local committed range                      | [Local branch review](commit-sweeper.md)      | `pnpm local-review -- --base origin/main`           |
+| Qualify the full local review artifact              | [Private local package](local-package.md)     | Build, pack, and install outside the checkout       |
 
 Production mutation commands are intentionally not repeated here. Follow the
 linked runbook, confirm its status and source of truth, and keep deployment,
@@ -55,17 +56,26 @@ everything else requires human comparison with current main.
   execution behavior
 - [State storage](state-storage.md) — active; Worker, R2, and Git-backed state
   ownership
+- [Canonical body tiering](canonical-body-tiering.md) — proposed; preserve records
+  while moving exact bodies from SQLite to the existing R2 bucket
 - [Action ledger](action-ledger.md) — active; mutation receipts and replay
   boundaries
 - [Issue review advisory labels](work-lane.md) — active; structured review labels
 - [Review cache](review-cache.md) — active; reusable review-state contract
+- [Intake triage](intake-triage.md) — active; bounded preliminary classification
+- [Manual Coverage credential probe](coverage-credential-probe.md) — active;
+  fixed read-only credential comparison, safety guard, and evidence limits
 - [Local review preflight summary](portable-review-receipt.md) — proposed
-  local-range export; bounded advisory PR-body handoff
+  local-range export; bounded advisory PR-body handoff and review-content reader
 - [GitHub webhook read model](github-webhook-read-model.md) — active; signed
   ingress, App subscriptions, snapshot freshness, and safety boundary
+- [Review authority contract](review-authority.md) — proposed integration;
+  inert acquisition binding, role classifier, and caller migration boundaries
 
 ## Configuration and repository onboarding
 
+- [GitHub API limits at openclaw scale](github-api-limits.md) — active audit;
+  every GitHub route we read, its hard limit, and how our reader handles it.
 - [Automation limits](limits.md) — active; validated by
   `pnpm run check:limits`
 - [Target repositories](target-repositories.md) — active; profiles, generic
@@ -84,10 +94,14 @@ everything else requires human comparison with current main.
 - [Local ClawSweeper skill](local-clawsweeper-skill.md) — active; read-only
   local exact-item or committed-range review
 
+- [Input-scan refusal diagnostics](input-scan-diagnostics.md) — active; exact-run,
+  read-only inspection of sanitized failure metadata
+
 ## Dashboards and observability
 
-- [Live dashboard](live-dashboard.md) — active; Worker status and operational
-  telemetry
+- [Live dashboard](live-dashboard.md) — active; Worker status, operational
+  telemetry, and resumable observational coverage census ownership/proof limits
+- [Agent performance metrics](agent-performance-metrics.md) — execution timing, repeated work, chart ownership and observation limits
 - [GitHub publication egress telemetry](github-egress-telemetry.md) — active;
   wire denominator, credential attribution, completeness, and retention
 - [Triage dashboard](triage-dashboard.md) — active; cached issue triage
@@ -104,11 +118,21 @@ everything else requires human comparison with current main.
 - [PR review comments](pr-review-comments.md) — active; review-thread handling
 - [Related issue discovery](related-issue-discovery.md) — active; duplicate and
   adjacent-report context
-- [Live proof](live-proof.md) — active inline review proof; retired post-review
-  attachments are ignored without rewriting historical records
 
 `docs/proof/**` contains inspectable artifacts for specific changes. Those
 files support their recorded claim but do not override current runbooks.
+
+The active controlled fixtures for PR read-model identity, snapshot bootstrap,
+resumable snapshots, and publication status use the installed Wrangler selected
+by `package.json` and `pnpm-lock.yaml`. Install frozen dependencies before running
+them; they do not acquire a separate toolchain. The retained Wrangler
+4.107.0/4.131.1 launchers outside these active fixtures are historical
+change-specific evidence. Do not run those retained launchers as current
+qualification. If a historical scenario is needed again, qualify it explicitly
+with the current frozen toolchain and record new results separately, preserving
+the original artifacts. `scripts/proof-scheduled-budget.mjs` accepts caller-owned
+tooling rather than downloading a runtime; its historical Miniflare API usage
+needs separate qualification before replay with the current dependency pair.
 
 ### Proof media retention
 

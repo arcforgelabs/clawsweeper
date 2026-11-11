@@ -9,7 +9,6 @@ import type {
   reviewHistoryForReviewer,
 } from "./review-history.js";
 import type { ReviewStructuralRecord } from "./review-structural-cache.js";
-import type { PrHydrationSnapshot } from "./pr-hydration-snapshot.js";
 import type { ReviewHistoryCoverage } from "./pr-review-history.js";
 import type { ProvenanceEvidence } from "./pr-review-provenance.js";
 import type { SchedulerDueCandidate } from "./scheduler-policy.js";
@@ -21,7 +20,7 @@ export type ItemKind = "issue" | "pull_request";
 export type ApplyKind = ItemKind | "all";
 export type DecisionKind = "close" | "keep_open";
 export type WorkCandidateKind = "none" | "manual_review" | "queue_fix_pr";
-export type NextStepAssessment = { kind: "none" | "required"; text: string };
+export type NextStepAssessment = { kind: "none" | "required" | "maintainer"; text: string };
 export type FailedReviewRetryRevisionKind = "pull_head_sha" | "item_source_revision";
 export interface FailedReviewRetryRevision {
   kind: FailedReviewRetryRevisionKind;
@@ -145,12 +144,11 @@ export type PrStatusLabelKind =
   | "needs_proof"
   | "needs_maintainer_proof_decision"
   | "waiting_on_author"
+  | "waiting_on_maintainer"
   | "ready_for_maintainer_look";
 export type FeatureShowcaseStatus = "showcase" | "none";
-export type TelegramVisibleProofStatus = "needed" | "not_needed";
-export type VisionFitStatus = "aligned" | "rejected" | "unclear" | "not_applicable";
 export type ImplementationComplexity = "small" | "medium" | "large" | "unclear" | "not_applicable";
-export type AutoImplementationCandidate = "none" | "strict_bug" | "vision_fit";
+export type AutoImplementationCandidate = "none" | "strict_bug";
 export type RootCauseRelationship =
   | "canonical"
   | "duplicate"
@@ -446,11 +444,6 @@ export interface TestingReview {
   missingE2e: string;
 }
 
-export interface TelegramVisibleProof {
-  status: TelegramVisibleProofStatus;
-  summary: string;
-}
-
 export interface FeatureShowcase {
   status: FeatureShowcaseStatus;
   reason: string;
@@ -546,7 +539,6 @@ export interface MergeRiskOption {
   body: string;
   category: MergeRiskOptionCategory;
   recommended: boolean;
-  automergeInstruction: string;
 }
 
 export interface LabelJustification {
@@ -607,9 +599,6 @@ export interface Decision {
   requiresProductDecision: boolean;
   reproductionAssessment: string;
   solutionAssessment: string;
-  visionFit: VisionFitStatus;
-  visionFitReason: string;
-  visionFitEvidence: string[];
   implementationComplexity: ImplementationComplexity;
   autoImplementationCandidate: AutoImplementationCandidate;
   rootCauseCluster: RootCauseClusterAssessment;
@@ -621,7 +610,6 @@ export interface Decision {
   securityReview: SecurityReview;
   realBehaviorProof: RealBehaviorProof;
   prRating: PrRating;
-  telegramVisibleProof: TelegramVisibleProof;
   featureShowcase: FeatureShowcase;
   overallCorrectness: OverallCorrectness;
   overallConfidenceScore: number;
@@ -669,6 +657,7 @@ export interface CompleteActivityContext {
 }
 
 export interface ItemContext {
+  securityReview?: SecurityReview;
   [completeActivityContextSymbol]?: CompleteActivityContext;
   issue: unknown;
   comments: unknown[];
@@ -688,7 +677,7 @@ export interface ItemContext {
   pullReviewComments?: unknown[];
   pullReviewCommentsRevision?: string;
   pullReviewActivityCursor?: string;
-  prHydrationSnapshot?: PrHydrationSnapshot;
+  pullFilesRaw?: unknown[];
   pullChecks?: unknown;
   bulkFiler?: BulkFilerReviewContext;
   counts?: {
@@ -791,6 +780,7 @@ export interface ReviewContextLedgerEntry {
 }
 
 export interface ReviewPromptRuntimeHints {
+  localRange?: boolean;
   networkCapability?: "allowlisted-proxy" | "unrestricted" | "none";
   hasGitHubToken?: boolean;
   targetDir?: string;
@@ -976,6 +966,12 @@ export interface PlanSelectionTelemetry {
 
 export type DueCandidate = SchedulerDueCandidate<Item, ExistingReview>;
 
+export interface ApplyCloseGuardBlock {
+  reason: string;
+  /** A live predicate positively established an intentional non-close outcome. */
+  closePolicyHoldVerified?: true;
+}
+
 export interface ApplyResult {
   repo?: string;
   number: number;
@@ -987,6 +983,7 @@ export interface ApplyResult {
   terminalMissingVerified?: boolean;
   terminalStateVerified?: boolean;
   guardedOpenStateVerified?: boolean;
+  closePolicyHoldVerified?: boolean;
   activeReviewLeaseVerified?: boolean;
   activeReviewLeaseExpiresAt?: string;
   terminalPolicyNoopVerified?: boolean;
@@ -1129,6 +1126,8 @@ export interface GitHubRuntimeBudget {
 
 export type GitHubDeadlineOptions = {
   deadlineAt?: number | undefined;
+  /** Preserve response strings for byte-exact receipt verification. GET-only. */
+  losslessJson?: boolean | undefined;
 };
 
 export type GitHubRequestReservation = {
@@ -1370,12 +1369,14 @@ export interface CanonicalPullRequestCommentSyncBlock {
 }
 
 export interface PrCloseCoverageProofGateBlock {
+  closePolicyHoldVerified?: true;
   actionTaken: ActionTaken;
   reason: string;
 }
 
 export interface PrCloseCoverageProofCoveringWitness {
   number: number;
+  mainSha?: string;
   provedAtMs: number;
   snapshotSha256: string;
   updatedAt: string | null;
@@ -1393,18 +1394,35 @@ export interface PrCloseCoverageRuntimeBudget {
   maxRuntimeMs: number;
 }
 
-export type PullRequestReviewState = "ready" | "blocked" | "needs-changes";
+/**
+ * `awaiting-maintainer`: no Before-merge item remains and the only hold is an
+ * outstanding maintainer decision. The PR is not defective, and it is not ready
+ * either: an owner still has to decide. It is a presentation state only: the
+ * published review-state marker keeps the v1 wire value `blocked` and adds
+ * `hold=maintainer_decision`, so released readers keep recognizing the comment.
+ */
+export type PullRequestReviewState = "ready" | "awaiting-maintainer" | "blocked" | "needs-changes";
+
+/** The v1 review-state marker values. Readers fail closed on anything else. */
+export type PullRequestReviewMarkerState = Exclude<PullRequestReviewState, "awaiting-maintainer">;
 
 export interface PublicBeforeMergeItem {
   label: string;
   detail: string;
-  state: Exclude<PullRequestReviewState, "ready">;
+  state: Exclude<PullRequestReviewState, "ready" | "awaiting-maintainer">;
+  /** Explicit routing only; absent ownership must not be inferred from prose. */
+  owner?: "maintainer";
 }
 
 export interface PullRequestReviewReadiness {
   headSha: string | null;
   state: PullRequestReviewState;
   items: PublicBeforeMergeItem[];
+  /**
+   * An outstanding maintainer decision packet. It is the owner's work, not the
+   * contributor's, so it is never a Before-merge item and never counts as one.
+   */
+  maintainerDecisionPending: boolean;
   normalizationFailed: boolean;
 }
 

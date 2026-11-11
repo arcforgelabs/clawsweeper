@@ -197,6 +197,80 @@ test("malformed PATH scanner version output refuses instead of falling through",
   );
 });
 
+test("failed scanner bootstrap exposes only validated facts and never starts a provider", (t) => {
+  const f = fixture(t);
+  const bin = useFakeScanner(t);
+  const scanner = realpathSync(
+    join(bin, process.platform === "win32" ? "trufflehog.exe" : "trufflehog"),
+  );
+  const originalCache = process.env.CLAWSWEEPER_REVIEW_TOOLS_DIR;
+  process.env.CLAWSWEEPER_REVIEW_TOOLS_DIR = join(f.root, "managed-cache");
+  const line =
+    '{"event":"review_tool_bootstrap_failed","phase":"download","category":"http","http_status":403}\n';
+  let stderr = "";
+  let installs = 0;
+  const messages: string[] = [];
+  const nativeSpawn = childProcess.spawnSync;
+  t.mock.method(console, "error", (...args) => {
+    messages.push(args.join(" "));
+  });
+  t.mock.method(childProcess, "spawnSync", (...args: Parameters<typeof nativeSpawn>) => {
+    if (args[0] === scanner && args[1]?.[0] === "--version") {
+      return nativeSpawn(process.execPath, ["-e", "console.log('trufflehog 3.97.1');"], args[2]);
+    }
+    if (args[0] === process.execPath && args[1]?.[0]?.endsWith("setup-review-tools.mjs")) {
+      installs++;
+      return nativeSpawn(
+        process.execPath,
+        [
+          "-e",
+          `process.stdout.write('private failed path'); process.stderr.write(${JSON.stringify(stderr)}); process.exitCode = 1;`,
+        ],
+        args[2],
+      );
+    }
+    return nativeSpawn(...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    if (originalCache === undefined) delete process.env.CLAWSWEEPER_REVIEW_TOOLS_DIR;
+    else process.env.CLAWSWEEPER_REVIEW_TOOLS_DIR = originalCache;
+  });
+  const cases = [
+    line,
+    ' { "http_status":403, "category":"http", "phase":"download", "event":"review_tool_bootstrap_failed" }\n',
+    "",
+    "private provider/loader error\n",
+    line + line,
+    line + "private extra data\n",
+    " ".repeat(256) + line,
+    line.replace('"phase":"download"', '"phase":"cache"'),
+    line.replace('"http_status":403', '"http_status":403,"private":"secret"'),
+  ];
+  for (const [index, text] of cases.entries()) {
+    stderr = text;
+    messages.length = 0;
+    assert.throws(
+      () => f.run({ kind: "prompt" }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgentInputScanError);
+        assert.equal(error.reason, "scanner_unavailable");
+        assert.equal(error.retryable, false);
+        assert.equal(agentInputScanFailureExitCode(error), null);
+        assert.equal(error.message.includes("403"), false);
+        assert.equal(error.message.includes("private"), false);
+        return true;
+      },
+    );
+    assert.deepEqual(messages, index < 2 ? [line.trimEnd()] : []);
+    assert.equal(existsSync(f.calls), false);
+    assert.equal(existsSync(f.diagnosticPromptPath), false);
+  }
+  assert.equal(installs, cases.length);
+});
+
 test("scanner bounds Git process growth while preserving complete binary inputs in both scans", (t) => {
   const f = fixture(t);
   const expected = new Map<string, string>();
@@ -783,7 +857,7 @@ process.stdout.write(JSON.stringify({
 }) + '\n');
 process.stderr.write(JSON.stringify({
   level: 'info-0', logger: 'trufflehog', msg: 'finished scanning',
-  trufflehog_version: '3.97.4', chunks: 1, bytes: 1,
+  trufflehog_version: '3.99.4', chunks: 1, bytes: 1,
   verified_secrets: 0, unverified_secrets: 1,
 }) + '\n');
 process.exit(183);
@@ -985,7 +1059,7 @@ function classifyExact(
         level: "info-0",
         logger: "trufflehog",
         msg: "finished scanning",
-        trufflehog_version: "3.97.4",
+        trufflehog_version: "3.99.4",
         chunks: 1,
         bytes: 1,
         verified_secrets: 0,
@@ -1010,7 +1084,7 @@ function classifyWithProductionPolicy(
         level: "info-0",
         logger: "trufflehog",
         msg: "finished scanning",
-        trufflehog_version: "3.97.4",
+        trufflehog_version: "3.99.4",
         chunks: 1,
         bytes: 1,
         verified_secrets: verifiedCount,
@@ -1268,7 +1342,7 @@ if (${scenario === "mixed unknown"}) findings.push({...findings[0], Raw: 'unrevi
 process.stdout.write(findings.map(finding => JSON.stringify(finding)).join('\n') + '\n');
 process.stderr.write(JSON.stringify({
   level: 'info-0', logger: 'trufflehog', msg: 'finished scanning',
-  trufflehog_version: '3.97.4', chunks: 2, bytes: 1000,
+  trufflehog_version: '3.99.4', chunks: 2, bytes: 1000,
   verified_secrets: 0, unverified_secrets: findings.length,
 }) + '\n');
 process.exit(183);
@@ -2500,7 +2574,7 @@ if (scenario === 'detector error') process.stderr.write(JSON.stringify({level:'e
 if (scenario === 'info error') process.stderr.write(JSON.stringify({level:'info-0', logger:'trufflehog', msg:'detector failed', error:'synthetic'}) + '\n');
 if (scenario === 'info errors') process.stderr.write(JSON.stringify({level:'info-0', logger:'trufflehog', msg:'detector failed', errors:[]}) + '\n');
 const completion = JSON.stringify({
-  level:'info-0', logger:'trufflehog', msg:'finished scanning', trufflehog_version:scenario === 'wrong version' ? 'changed' : '3.97.4',
+  level:'info-0', logger:'trufflehog', msg:'finished scanning', trufflehog_version:scenario === 'wrong version' ? 'changed' : '3.99.4',
   chunks:2, bytes:1000, verified_secrets:findings.filter(value => value.Verified).length + (scenario === 'verified count' ? 1 : 0), unverified_secrets:findings.filter(value => !value.Verified).length + (scenario === 'wrong count' ? 1 : 0),
 }) + (scenario === 'unterminated stderr' ? '' : '\n');
 if (scenario !== 'missing completion') process.stderr.write(completion);
@@ -2524,14 +2598,15 @@ process.exit(scenario === 'unexpected successful output' ? 0 : 183);
       }
       return f.run(source);
     };
-    if (gatewayConfigFixture && scenario === "diff") {
+    if ((gatewayConfigFixture || mcpAppsFixture) && scenario === "diff") {
+      const exactSource = gatewayConfigFixture ? gatewayConfigSource : mcpAppsSource;
       assert.equal(run().status, 0);
       assert.equal(readFileSync(f.calls, "utf8"), "called");
       const classified = notices.map(([message]) => JSON.parse(String(message)));
       assert.equal(classified.length, 2);
       for (const notice of classified) {
         assert.equal(notice.event, "agent_input_scan_classified");
-        assert.equal(notice.source, gatewayConfigSource);
+        assert.equal(notice.source, exactSource);
         assert.equal(notice.fixtureSha256, createHash("sha256").update(uri).digest("hex"));
         assert.equal(notice.detector, "URI");
         assert.equal(notice.findings.length, 1);
@@ -2546,7 +2621,7 @@ process.exit(scenario === 'unexpected successful output' ? 0 : 183);
       assert.deepEqual(patch?.patch, {
         from: baseSha,
         to: headSha,
-        sourceBlob: f.git("rev-parse", `${headSha}:${gatewayConfigSource}`),
+        sourceBlob: f.git("rev-parse", `${headSha}:${exactSource}`),
         sourceLine: literalLine,
       });
       assert.equal(
@@ -2631,7 +2706,11 @@ process.exit(scenario === 'unexpected successful output' ? 0 : 183);
       ).map((location, index) => ({
         ...location,
         literalLine,
-        ...(gatewayConfigFixture ? { role: index === 0 ? "base" : "head" } : {}),
+        ...(gatewayConfigFixture
+          ? { role: index === 0 ? "base" : "head" }
+          : mcpAppsFixture
+            ? { role: index === 0 ? "head" : "base" }
+            : {}),
       }));
       const expectedFindings = expectedLocations.length;
       assert.equal(
@@ -3031,7 +3110,8 @@ test("patch admission keeps legacy duplicate records and rejects coherent non-co
     if (result.kind === "refused")
       assert.equal(
         result.diagnostic.reason,
-        name === "unapproved source" ? "source_not_reviewed" : "material_not_reviewed",
+        // The shared URI's exact policy rejects this synthetic line before source attribution.
+        name === "unapproved source" ? "literal_mismatch" : "material_not_reviewed",
         name,
       );
   }
@@ -3593,6 +3673,31 @@ for (const {
     host: "127.0.0.1:18800",
     suffix: "",
     lines: (value: string) => [`      expect(profile?.cdpUrl).toBe("${value}");`],
+  },
+  {
+    name: "Chrome MCP endpoint argument redaction",
+    protocol: "https:",
+    host: "browser.example",
+    username: "fixture-user",
+    password: ["fixture", "password"].join("-"),
+    path: "",
+    suffix: "/?token=fixture-token",
+    source: "extensions/browser/src/browser/chrome-mcp.test.ts",
+    lines: (value: string) => [`    "${value}";`],
+  },
+  {
+    name: "existing-session loopback CDP endpoint",
+    protocol: "http:",
+    host: "127.0.0.1:9222",
+    username: "openclaw",
+    password: ["relay", "token"].join("-"),
+    path: "",
+    suffix: "",
+    source: "extensions/browser/src/browser/server-context.existing-session.test.ts",
+    lines: (value: string) => [
+      `        cdpUrl: "${value}",`,
+      `      expect.objectContaining({ cdpUrl: "${value}" }),`,
+    ],
   },
   {
     name: "plugin setting draft redaction",

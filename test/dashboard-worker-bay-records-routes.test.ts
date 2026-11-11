@@ -1,5 +1,6 @@
 import {
   assert,
+  MemoryCache,
   createHash,
   createHmac,
   fs,
@@ -2689,7 +2690,6 @@ test("public triage pages expose aggregate counts without identity controls", as
     new Request("https://clawsweeper.openclaw.ai/pr-proof-triage"),
     {},
   );
-  const overviewPage = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/"), {});
   const issueHtml = await issuePage.text();
   const proofHtml = await proofPage.text();
   for (const html of [issueHtml, proofHtml]) {
@@ -2721,7 +2721,6 @@ test("public triage pages expose aggregate counts without identity controls", as
   assert.match(issueHtml, /Queueable fixes without a no-new-fix-pr blocker/);
   assert.match(proofHtml, /Needs proof review/);
   assert.match(proofHtml, /Proof is requested but not yet marked sufficient or overridden/);
-  assert.doesNotMatch(await overviewPage.text(), /href="\/bay"/);
 });
 
 async function renderPublicTriageApplication(
@@ -2856,7 +2855,6 @@ test("public triage UI fails closed for malformed and unavailable snapshots", as
         "missing-proof",
         "sufficient-proof",
         "mock-only-proof",
-        "telegram-proof",
         "sufficient-with-need-label",
       ],
     },
@@ -2973,6 +2971,56 @@ test("public triage UI fails closed for malformed and unavailable snapshots", as
   }
 });
 
+test("public triage pages accept the snapshots their APIs collect", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    value: { default: new MemoryCache() },
+  });
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/labels")) return jsonResponse([]);
+    if (url.pathname === "/search/issues") return jsonResponse({ total_count: 0, items: [] });
+    throw new Error(`unexpected fetch ${url.pathname}`);
+  };
+  try {
+    for (const [pathname, endpoint] of [
+      ["/triage", "/api/triage"],
+      ["/pr-proof-triage", "/api/pr-proof-triage"],
+    ]) {
+      const env = { TARGET_REPOS: "openclaw/openclaw", GITHUB_TOKEN: "synthetic-fixture-only" };
+      const page = await worker.fetch(
+        new Request(`https://clawsweeper.openclaw.ai${pathname}`),
+        env,
+      );
+      const api = await worker.fetch(
+        new Request(`https://clawsweeper.openclaw.ai${endpoint}`),
+        env,
+      );
+      assert.equal(api.status, 200, endpoint);
+      const snapshot = await api.json();
+      assert.equal(snapshot.complete, true, endpoint);
+      const elements = await renderPublicTriageApplication(
+        await page.text(),
+        pathname,
+        async () => ({
+          ok: true,
+          json: async () => snapshot,
+        }),
+      );
+      assert.equal(elements.get("view-count")?.textContent, "0", pathname);
+      assert.match(
+        String(elements.get("snapshot-health")?.textContent),
+        /Complete aggregate snapshot/,
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+  }
+});
+
 test("dashboard health identifies the deployed revision", async () => {
   const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/api/health"), {
     CLAWSWEEPER_DEPLOY_SHA: "abc123",
@@ -3005,6 +3053,24 @@ test("worker health samples a bounded recent run history within its section dead
   assert.match(
     fs.readFileSync("dashboard/wrangler.toml", "utf8"),
     /WORKER_HEALTH_FETCH_CONCURRENCY\s*=\s*"20"/,
+  );
+});
+
+test("worker health samples current exact and scheduled review run titles", () => {
+  const titled = (id: number, title: string) => ({
+    ...completedReviewRun(id, id, "failure", id * 1_000),
+    name: title,
+    display_title: title,
+  });
+  const sample = recentWorkerHealthRunSample([
+    titled(1, `Review exact item openclaw/openclaw#1 rev 2 head ${"a".repeat(40)}`),
+    titled(2, "Review scheduled hot item openclaw/openclaw#2 rev 1"),
+    titled(3, "Review scheduled normal item openclaw/openclaw#3 rev 1"),
+    titled(4, "Reconcile exact-review leases"),
+  ]);
+  assert.deepEqual(
+    sample.map((run) => run.id),
+    [1, 2, 3],
   );
 });
 

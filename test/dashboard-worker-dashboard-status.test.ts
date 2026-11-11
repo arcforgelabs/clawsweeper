@@ -2,11 +2,10 @@ import {
   assert,
   generateKeyPairSync,
   test,
-  createContext,
-  Script,
   worker,
   workflowJobsForRunSnapshot,
   ExactReviewQueue,
+  StatusStore,
   MemoryKv,
   MemoryCache,
   MemoryDurableStorage,
@@ -18,16 +17,8 @@ import {
   jsonResponse,
   buildExactReviewQueueRequest,
 } from "./dashboard-worker-harness.ts";
-import {
-  publicHealthHistoryContract,
-  STATUS_REFRESH_TIMEOUT_MS,
-  githubJsonForTest,
-} from "../dashboard/worker.ts";
-import { publicRecentDurablePublicationEventsProjection } from "../dashboard/public-observability.ts";
-import {
-  publicationEventsFixture,
-  publicationStatusFixture,
-} from "./helpers/publication-status-fixture.ts";
+import { STATUS_REFRESH_TIMEOUT_MS, githubJsonForTest } from "../dashboard/worker.ts";
+import { publicationStatusFixture } from "./helpers/publication-status-fixture.ts";
 
 const ISSUE_TRIAGE_VIEW_IDS = [
   "clawsweeper",
@@ -46,7 +37,6 @@ const PROOF_TRIAGE_VIEW_IDS = [
   "missing-proof",
   "sufficient-proof",
   "mock-only-proof",
-  "telegram-proof",
   "sufficient-with-need-label",
 ];
 
@@ -114,140 +104,6 @@ function assertAggregateTriageSnapshot(snapshot: any, viewIds: string[], marker:
   }
 }
 
-function dashboardApplyObservabilityFixture() {
-  return {
-    schema_version: 1,
-    range: "24h",
-    generated_at: "2026-08-15T12:00:00.000Z",
-    telemetry_complete: true,
-    event_count: 20,
-    queue: {
-      active: 2,
-      capacity: 8,
-      ready: 3,
-      backoff: 1,
-      dispatching: 1,
-      leased: 1,
-      oldest_ready_age_seconds: 60,
-      oldest_backoff_age_seconds: 30,
-      oldest_lease_age_seconds: 15,
-    },
-    last_15_minutes: {
-      arrivals: 3,
-      applied: 2,
-      closed: 1,
-      superseded: 0,
-      retried: 1,
-      dead_lettered: 0,
-      net_drain: -1,
-    },
-    last_60_minutes: {
-      arrivals: 10,
-      applied: 8,
-      closed: 5,
-      superseded: 1,
-      retried: 4,
-      dead_lettered: 1,
-      net_drain: -2,
-    },
-    totals: {
-      arrivals: 10,
-      applied: 8,
-      closed: 5,
-      superseded: 1,
-      retried: 4,
-      dead_lettered: 1,
-      net_drain: -2,
-    },
-    retry_amplification: 0.5,
-    lease: { wait_ms: 250, hold_ms: 500 },
-    failures: {
-      state_lease_timeout: 1,
-      state_lease_contention: 2,
-      action_ledger: 0,
-      state_publication: 0,
-      safe_close_blocked: 1,
-      safe_close_failure: 0,
-      last_failure_kind: "workflow_failure",
-      last_failure_at: "2026-08-15T11:30:00.000Z",
-    },
-  };
-}
-
-function dashboardReviewCoverageFixture() {
-  return {
-    ok: true,
-    generated_at: new Date().toISOString(),
-    window_days: 7,
-    inventory_generated_at: new Date(Date.now() - 60_000).toISOString(),
-    inventory_status: "current",
-    totals: {
-      open_records: 100,
-      reviewable_records: 80,
-      tracked_records: 75,
-      reviewed_recent: 60,
-      stale: 10,
-      failed: 2,
-      expired: 3,
-      unreviewed_records: 20,
-      untracked_open: 5,
-      pending: 4,
-      excluded: 20,
-      unschedulable_records: 1,
-      record_drift: 0,
-      coverage_percent: 75,
-    },
-  };
-}
-
-function dashboardHealthHistoryFixture(range = "6h") {
-  const rangeMs = { "6h": 6 * 60 * 60_000, "24h": 24 * 60 * 60_000, "7d": 7 * 24 * 60 * 60_000 }[
-    range
-  ]!;
-  const at =
-    Math.floor((Date.now() - Math.min(rangeMs / 2, 15 * 60_000)) / (5 * 60_000)) * (5 * 60_000);
-  return {
-    schema_version: 1,
-    range,
-    retention_days: 7,
-    samples: [
-      {
-        at: new Date(at).toISOString(),
-        exact_review: {
-          collection_ok: true,
-          review: {
-            pending: 4,
-            enqueued_total: 10_000_020,
-            completed_total: 10_000_016,
-            shed_total: 1,
-          },
-          publication: {
-            pending: 2,
-            enqueued_total: 10_000_018,
-            completed_total: 10_000_016,
-          },
-          handoff: { status: "healthy", pending: 4, dispatching: 1, leased: 2 },
-        },
-        state_writer: {
-          collection_ok: true,
-          terminal_collection_ok: true,
-          mode: "batch",
-          tracked_holding: 1,
-          tracked_waiting: 2,
-          tracked_releasing: 0,
-          accepted_operations_total: 16,
-          state_commits_total: 8,
-          materialized_items_total: 16,
-          contention_timeouts_total: 0,
-          wait_ms: { p50: 10, p95: 20, samples: 2 },
-          hold_ms: { p50: 30, p95: 40, samples: 2 },
-          last_successful_materialization_at: new Date(at - 60_000).toISOString(),
-        },
-      },
-    ],
-  };
-}
-
 test("dashboard polling ignores workflow snapshots without disabling other durable reads", async (t) => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
@@ -310,7 +166,7 @@ test("dashboard polling ignores workflow snapshots without disabling other durab
                 : [],
         });
       }
-      const jobMatch = /\/actions\/runs\/(41|42)\/jobs$/.exec(url.pathname);
+      const jobMatch = /\/actions\/runs\/(41|42)\/attempts\/1\/jobs$/.exec(url.pathname);
       if (jobMatch) {
         jobReads += 1;
         const run = jobMatch[1] === "42" ? active : completed;
@@ -365,7 +221,8 @@ test("dashboard polling ignores workflow snapshots without disabling other durab
     assert.equal(snapshot.operational_health.queued_over_threshold, 0);
     assert.equal(snapshot.health.attempts, 1);
     assert.equal(snapshot.health.successful_attempts, 1);
-    assert.equal(runReads, 7);
+    // One completed listing plus five active-status censuses.
+    assert.equal(runReads, 6);
     assert.equal(jobReads, 2);
     assert.ok(paths.some((pathname) => !pathname.startsWith("/github-read-model/")));
     assert.equal(
@@ -376,7 +233,7 @@ test("dashboard polling ignores workflow snapshots without disabling other durab
     await new Promise((resolve) => setTimeout(resolve, 2));
     const refreshed = await (await worker.fetch(request, env)).json();
     assert.ok(Date.parse(refreshed.generated_at) > Date.parse(generatedAt));
-    assert.equal(runReads, 14);
+    assert.equal(runReads, 12);
     assert.equal(jobReads, 2, "normal job caches remain enabled in poll mode");
     assert.equal(
       paths.some((pathname) => pathname.startsWith("/github-read-model/")),
@@ -407,20 +264,20 @@ test("polling job censuses preserve versioned caches, incomplete pages, and erro
     const first = await workflowJobsForRunSnapshot(
       env,
       "generated-owner/generated-repo",
-      41,
+      { id: 41, run_attempt: 1 },
       github,
     );
     assert.equal(first.complete, totalCount === 1);
     assert.equal(first.jobs.length, 1);
     const record = JSON.parse(
-      String(await store.get("workflow-jobs:generated-owner/generated-repo:41")),
+      String(await store.get("workflow-jobs:generated-owner/generated-repo:41:1")),
     );
     assert.equal(record.schema_version, 2);
     assert.equal(record.complete, totalCount === 1);
     const cached = await workflowJobsForRunSnapshot(
       env,
       "generated-owner/generated-repo",
-      41,
+      { id: 41, run_attempt: 1 },
       async () => {
         throw new Error("polling must retain the normal job cache");
       },
@@ -428,12 +285,86 @@ test("polling job censuses preserve versioned caches, incomplete pages, and erro
     assert.deepEqual(cached, first);
     assert.equal(queueReads, 0);
     await assert.rejects(
-      workflowJobsForRunSnapshot(env, "generated-owner/generated-repo", 42, async () => {
-        throw new Error("synthetic GitHub failure");
-      }),
+      workflowJobsForRunSnapshot(
+        env,
+        "generated-owner/generated-repo",
+        { id: 42, run_attempt: 1 },
+        async () => {
+          throw new Error("synthetic GitHub failure");
+        },
+      ),
       /synthetic GitHub failure/,
     );
     assert.equal(queueReads, 0);
+  }
+});
+
+test("worker job caches isolate attempts across reruns, overlapping reads and restart", async () => {
+  const store = new MemoryKv();
+  const repo = "generated-owner/generated-repo";
+  const paths: string[] = [];
+  const release = statusGate<void>();
+  const github = async (path: string) => {
+    paths.push(path);
+    const attempt = Number(path.match(/\/attempts\/(\d+)\/jobs/)?.[1]);
+    assert.ok(attempt > 0, "the selected attempt must be explicit on every page");
+    if (attempt === 2) await release.promise;
+    return {
+      total_count: 1,
+      jobs: [{ id: attempt, run_id: 41, status: attempt === 2 ? "in_progress" : "completed" }],
+    };
+  };
+  // Unbound transient caches must not qualify as evidence for any attempt.
+  await store.put(
+    `workflow-jobs:${repo}:41`,
+    JSON.stringify({
+      schema_version: 2,
+      complete: true,
+      total_count: 0,
+      jobs: [],
+    }),
+  );
+  const read = (run_attempt: number) =>
+    workflowJobsForRunSnapshot({ STATUS_STORE: store }, repo, { id: 41, run_attempt }, github);
+  assert.equal((await read(1)).jobs[0].id, 1);
+  const rerun = read(2);
+  assert.equal((await read(3)).jobs[0].id, 3);
+  release.release();
+  const active = await rerun;
+  assert.equal(active.complete, true);
+  assert.equal(active.jobs[0].id, 2);
+  assert.equal(active.jobs[0].status, "in_progress");
+  assert.deepEqual(
+    paths.map((path) => path.match(/\/attempts\/(\d+)\//)?.[1]),
+    ["1", "2", "3"],
+  );
+  for (const attempt of [1, 2, 3]) {
+    const restarted = await workflowJobsForRunSnapshot(
+      { STATUS_STORE: store },
+      repo,
+      { id: 41, run_attempt: attempt },
+      async () => {
+        throw new Error("each attempt cache must survive restart independently");
+      },
+    );
+    assert.equal(restarted.jobs[0].id, attempt);
+    assert.equal(restarted.complete, true);
+  }
+});
+
+test("worker job reads cannot guess a missing or invalid workflow attempt", async () => {
+  for (const run_attempt of [undefined, 0, -1, 1.5, NaN]) {
+    await assert.rejects(
+      workflowJobsForRunSnapshot(
+        {},
+        "generated-owner/generated-repo",
+        { id: 41, run_attempt },
+        async () => {
+          assert.fail("invalid workflow identity must not request latest jobs");
+        },
+      ),
+      /Workflow run attempt unavailable/,
+    );
   }
 });
 
@@ -453,7 +384,7 @@ test("worker job pagination marks a capped census incomplete across cache reuse"
   const first = await workflowJobsForRunSnapshot(
     { STATUS_STORE: statusStore },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     github,
   );
   assert.equal(first.jobs.length, 300);
@@ -463,7 +394,7 @@ test("worker job pagination marks a capped census incomplete across cache reuse"
   const restarted = await workflowJobsForRunSnapshot(
     { STATUS_STORE: statusStore },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => {
       throw new Error("cached incomplete census should not fetch");
     },
@@ -475,10 +406,11 @@ test("worker job pagination marks a capped census incomplete across cache reuse"
 test("worker job cache cannot claim a complete malformed or cross-run census", async () => {
   const statusStore = new MemoryKv();
   await statusStore.put(
-    "workflow-jobs:generated-owner/generated-repo:41",
+    "workflow-jobs:generated-owner/generated-repo:41:1",
     JSON.stringify({
-      schema_version: 1,
+      schema_version: 2,
       complete: true,
+      total_count: 3,
       jobs: [
         null,
         { id: 1, run_id: 99, name: "synthetic unrelated job" },
@@ -489,7 +421,7 @@ test("worker job cache cannot claim a complete malformed or cross-run census", a
   const cached = await workflowJobsForRunSnapshot(
     { STATUS_STORE: statusStore },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => {
       throw new Error("malformed cached census should fail closed without a source read");
     },
@@ -501,20 +433,19 @@ test("worker job cache cannot claim a complete malformed or cross-run census", a
 test("worker job cache requires an exact versioned total before claiming completion", async () => {
   const job = { id: 2, run_id: 41, name: "synthetic matching job" };
   for (const [record, expectedComplete] of [
-    [{ schema_version: 1, complete: true, jobs: [job] }, false],
     [{ schema_version: 2, complete: true, total_count: 1, jobs: [job] }, true],
     [{ schema_version: 2, complete: true, total_count: 2, jobs: [job] }, false],
     [{ schema_version: 2, complete: true, total_count: "1", jobs: [job] }, false],
   ]) {
     const statusStore = new MemoryKv();
     await statusStore.put(
-      "workflow-jobs:generated-owner/generated-repo:41",
+      "workflow-jobs:generated-owner/generated-repo:41:1",
       JSON.stringify(record),
     );
     const cached = await workflowJobsForRunSnapshot(
       { STATUS_STORE: statusStore },
       "generated-owner/generated-repo",
-      41,
+      { id: 41, run_attempt: 1 },
       async () => {
         throw new Error("cached census should not fetch");
       },
@@ -539,7 +470,7 @@ test("live worker job fetch versions its complete cache without repairing webhoo
       }),
     },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => ({
       total_count: 1,
       jobs: [
@@ -553,7 +484,7 @@ test("live worker job fetch versions its complete cache without repairing webhoo
   );
   assert.equal(live.complete, true);
   const stored = JSON.parse(
-    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41")),
+    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41:1")),
   );
   assert.equal(stored.schema_version, 2);
   assert.equal(stored.complete, true);
@@ -562,7 +493,7 @@ test("live worker job fetch versions its complete cache without repairing webhoo
   const restarted = await workflowJobsForRunSnapshot(
     { STATUS_STORE: statusStore },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => {
       throw new Error("versioned complete census should survive restart");
     },
@@ -588,7 +519,7 @@ test("live worker job fetch cannot claim a complete malformed or cross-run censu
       CLAWSWEEPER_WEBHOOK_SECRET: "synthetic-secret",
     },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => ({
       total_count: 3,
       jobs: [
@@ -615,7 +546,7 @@ test("live worker job fetch cannot claim a complete malformed or cross-run censu
   );
 
   const stored = JSON.parse(
-    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41")),
+    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41:1")),
   );
   assert.equal(stored.complete, false);
   assert.deepEqual(
@@ -629,6 +560,7 @@ test("live worker job fetch rejects malformed pages and ambiguous job identities
   const cases = [
     { payload: { jobs: null, total_count: 0 }, retained: 0 },
     { payload: { jobs: [{ id: "2", run_id: 41 }], total_count: 1 }, retained: 0 },
+    { payload: { jobs: [{ id: 2, run_id: 41, run_attempt: 2 }], total_count: 1 }, retained: 0 },
     {
       payload: {
         jobs: [
@@ -645,13 +577,13 @@ test("live worker job fetch rejects malformed pages and ambiguous job identities
     const live = await workflowJobsForRunSnapshot(
       { STATUS_STORE: statusStore },
       "generated-owner/generated-repo",
-      41,
+      { id: 41, run_attempt: 1 },
       async () => payload,
     );
     assert.equal(live.complete, false);
     assert.equal(live.jobs.length, retained);
     const stored = JSON.parse(
-      String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41")),
+      String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41:1")),
     );
     assert.equal(stored.complete, false);
     assert.equal(stored.jobs.length, retained);
@@ -683,12 +615,12 @@ test("live worker job fetch requires a strict stable total before completion", a
         }),
       },
       "generated-owner/generated-repo",
-      41,
+      { id: 41, run_attempt: 1 },
       async () => payload,
     );
     assert.equal(live.complete, false);
     const stored = JSON.parse(
-      String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41")),
+      String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41:1")),
     );
     assert.equal(stored.complete, false);
     assert.deepEqual(repairBodies, []);
@@ -699,7 +631,7 @@ test("live worker job fetch requires a strict stable total before completion", a
   const changedTotal = await workflowJobsForRunSnapshot(
     { STATUS_STORE: statusStore },
     "generated-owner/generated-repo",
-    41,
+    { id: 41, run_attempt: 1 },
     async () => {
       page += 1;
       return page === 1
@@ -717,1759 +649,10 @@ test("live worker job fetch requires a strict stable total before completion", a
   assert.equal(changedTotal.complete, false);
   assert.equal(changedTotal.jobs.length, 100);
   const stored = JSON.parse(
-    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41")),
+    String(await statusStore.get("workflow-jobs:generated-owner/generated-repo:41:1")),
   );
   assert.equal(stored.complete, false);
   assert.equal(stored.jobs.length, 100);
-});
-
-test("dashboard HTML preserves UTF-8 emoji labels", async () => {
-  const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/"), {
-    CLAWSWEEPER_CRABFLEET_URL: "https://fleet.example.test/terminal?view=live&mode=all",
-  });
-  assert.equal(response.headers.get("content-type"), "text/html; charset=utf-8");
-  const html = await response.text();
-  assert.match(html, /<title>🦞 ClawSweeper Live<\/title>/);
-  assert.match(html, /if \(!Number\.isFinite\(timestamp\)\) return "";/);
-  assert.match(html, /Individual close details are unavailable; aggregate counts remain above\./);
-  assert.match(html, /content: "🦞"/);
-  assert.match(html, /Codex Workers/);
-  assert.doesNotMatch(html, /Active Sweeps/);
-  assert.doesNotMatch(html, /Queue Depth/);
-  assert.doesNotMatch(html, /Health Trends/);
-  assert.doesNotMatch(html, /id="health-trend-grid"/);
-  assert.match(html, /\/api\/health-history\?range=/);
-  assert.match(html, /Work execution needs attention/);
-  assert.doesNotMatch(html, /Review reliability/);
-  assert.doesNotMatch(html, /\/api\/review-observability\?range=/);
-  assert.match(html, /Apply \/ close health/);
-  assert.match(html, /id="apply-observability-body"/);
-  assert.match(html, /id="health-strip"/);
-  assert.match(html, /Fleet Review Coverage/);
-  assert.match(html, /id="review-coverage-body"/);
-  assert.match(html, /\/api\/review-coverage/);
-  assert.ok(html.indexOf("System Overview") < html.indexOf('id="review-coverage-body"'));
-  assert.match(html, /<details class="review-coverage">/);
-  assert.match(
-    html,
-    /<h2 id="review-coverage-title">Fleet Review Coverage<\/h2>\s*<details class="review-coverage">/,
-  );
-  assert.match(
-    html,
-    /<summary>\s*<span class="coverage-summary-content">\s*<span class="coverage-summary-label">Explore fleet-wide coverage<\/span>/,
-  );
-  assert.doesNotMatch(html, /<summary>(?:(?!<\/summary>)[\s\S])*<h2/);
-  assert.doesNotMatch(html, /\.review-coverage > summary \{[^}]*display: flex/);
-  assert.doesNotMatch(html, /<details class="review-coverage" open>/);
-  assert.match(html, /aria-labelledby="review-coverage-title"/);
-  assert.match(html, /\/api\/apply-observability\?range=/);
-  assert.match(html, /data-trend-range="6h"/);
-  assert.match(html, /<details class="execution-alert">/);
-  assert.match(html, /Error Rate/);
-  assert.match(html, /denominator unavailable/);
-  assert.match(html, /numerator unavailable/);
-  assert.match(html, /rate unavailable or inconsistent/);
-  assert.match(html, /Recovery Rate/);
-  assert.match(html, /Capacity/);
-  assert.match(html, /Only jobs that execute Codex count against this budget/);
-  assert.match(html, /id="exact-review-lanes"/);
-  assert.match(html, /grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
-  assert.match(html, /\.exact-review-lanes \{ display: contents; \}/);
-  assert.match(html, /Review admission/);
-  assert.match(html, /Result publication/);
-  assert.match(html, /Net publication rate/);
-  assert.match(html, /Review throughput/);
-  assert.doesNotMatch(html, /Control Plane · GitHub Actions, not Codex/);
-  assert.doesNotMatch(html, /id="control-plane"/);
-  assert.match(html, /\.exact-lanes \{ grid-template-columns: 1fr; \}/);
-  assert.match(
-    html,
-    /<div class="exact-lanes">\s*<div class="exact-review-lanes" id="exact-review-lanes"[\s\S]*?<section class="exact-lane" id="state-writer-health"/,
-  );
-  assert.ok(html.indexOf("Codex Capacity") < html.indexOf('id="exact-review-lanes"'));
-  assert.ok(html.indexOf('id="exact-review-lanes"') < html.indexOf("Apply / close health"));
-  assert.ok(html.indexOf('id="exact-review-lanes"') < html.indexOf("Handoff Health"));
-  assert.match(html, /Live terminals/);
-  assert.match(html, /href="https:\/\/fleet\.example\.test\/terminal\?view=live&amp;mode=all"/);
-  assert.match(html, /Loading pipeline state/);
-  assert.match(html, /System Overview/);
-  assert.match(html, /id="exact-review-handoff"/);
-  assert.match(html, /function renderExactReviewHandoff/);
-  assert.match(html, /id="recent-durable-publication-events"/);
-  assert.match(html, /function renderRecentDurablePublicationEvents/);
-  assert.match(html, /Workflow activity is not lifecycle completion/);
-  assert.match(html, /waiting for run claim/);
-  assert.match(html, /id="apply-health"/);
-  assert.match(html, /function renderApplyHealth/);
-  assert.match(html, /candidate examined count unavailable for this lane/);
-  assert.match(html, /Pruning sweep/);
-  assert.match(html, /Copy command/);
-  assert.match(html, /applyHealthRecommendedAction/);
-  assert.match(html, /Rotation cursor missing/);
-  assert.match(html, /Inspect the cursor-write and state-publish steps/);
-  assert.match(html, /const skipCount = skipReasons\[reason\]/);
-  assert.doesNotMatch(html, /Apply needs attention/);
-  assert.doesNotMatch(html, /Automatic Builds|id="automatic-work"/);
-  assert.match(html, /Active Workers/);
-  assert.match(html, /id="worker-dialog"/);
-  assert.match(html, /function renderPublicReferenceDialog/);
-  assert.match(html, /data-public-reference-key/);
-  assert.match(
-    html,
-    /\.public-reference-row:focus-visible \{[\s\S]*?outline: 2px solid var\(--claw\)/,
-  );
-  assert.match(html, /Step Timeline/);
-  assert.match(html, /worker-target-title/);
-  assert.match(html, /Refreshing live status in the background/);
-  assert.match(html, /Active Pipeline/);
-  assert.doesNotMatch(html, /Automerge Reliability/);
-  assert.doesNotMatch(html, /id="automerge-reliability"/);
-  assert.doesNotMatch(html, /Automerge Product Health|Cluster Intake|\/api\/automerge-metrics/);
-  assert.doesNotMatch(html, /id="automerge-repo"/);
-  assert.doesNotMatch(html, /id="automerge-policy"/);
-  assert.doesNotMatch(html, /Recent automerge sessions/);
-  assert.doesNotMatch(html, /data\.sessions/);
-  assert.match(html, /Closed by ClawSweeper/);
-  assert.match(html, /Worker Health/);
-  assert.match(html, /Recent Activity/);
-  assert.doesNotMatch(html, /ðŸ|â|âš|âœ/);
-});
-
-test("dashboard sanitizes stored status immediately and never renders transport errors", async () => {
-  const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/"));
-  const html = await response.text();
-  const script = [...html.matchAll(/<script>\n([\s\S]*?)\n<\/script>/g)].at(-1)?.[1];
-  assert.ok(script);
-  const marker = "synthetic-browser-storage-marker";
-
-  const run = async (cachedStatus: string | null, fetchedStatus?: unknown) => {
-    const elements = new Map<string, Record<string, unknown>>();
-    const elementFor = (id: string) => {
-      if (!elements.has(id)) {
-        elements.set(id, {
-          addEventListener: () => undefined,
-          className: "",
-          dataset: {},
-          id,
-          innerHTML: "",
-          open: false,
-          showModal() {
-            this.open = true;
-          },
-          close() {
-            this.open = false;
-          },
-          style: {},
-          textContent: "",
-        });
-      }
-      return elements.get(id)!;
-    };
-    const writes: string[] = [];
-    let removed = false;
-    const context = createContext({
-      console,
-      document: {
-        addEventListener: () => undefined,
-        body: { classList: { add: () => undefined, remove: () => undefined } },
-        documentElement: { dataset: {} },
-        getElementById: elementFor,
-        querySelector: () => null,
-        querySelectorAll: () => [],
-      },
-      fetch: async () => ({
-        headers: { get: () => null },
-        json: async () => {
-          if (fetchedStatus !== undefined) return structuredClone(fetchedStatus);
-          throw new Error(`${marker} https://invalid.example/private?item=1`);
-        },
-        ok: true,
-        status: 200,
-      }),
-      history: { replaceState: () => undefined },
-      localStorage: {
-        getItem: () => cachedStatus,
-        removeItem: () => {
-          removed = true;
-        },
-        setItem: (_key: string, value: string) => writes.push(value),
-      },
-      location: { hash: "", pathname: "/", search: "" },
-      navigator: { clipboard: { writeText: async () => undefined } },
-      setInterval: () => 1,
-      setTimeout: () => 1,
-      window: { addEventListener: () => undefined },
-    });
-    new Script(script).runInContext(context);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return { context, elements, removed, writes };
-  };
-
-  const cached = JSON.stringify({
-    schema_version: 1,
-    generated_at: "2026-08-15T12:00:00.000Z",
-    source: { repository: marker },
-    fleet: {},
-    workers: [{ title: marker, run_url: `https://invalid.example/${marker}?item=1` }],
-    automatic_work: [],
-    pipeline: [],
-    bay: {},
-    recent: {},
-    diagnostics: { errors: [marker], error_count: 0 },
-    freshness: {
-      state: "fresh",
-      cache_state: "fresh",
-      generated_at: "2026-08-15T12:00:00.000Z",
-      age_ms: 0,
-      maximum_age_ms: 60_000,
-    },
-    exact_review_queue: {
-      scheduled_feed: {
-        target_rate_per_hour: 300,
-        enqueue_replay: "scheduled_disposition_v1",
-        token_balance: marker,
-      },
-    },
-  });
-  const withCache = await run(cached);
-  assert.equal(withCache.removed, false);
-  assert.ok(withCache.writes.length >= 1);
-  assert.equal(withCache.writes[0].includes(marker), false);
-  assert.match(withCache.writes[0], /telemetry_unavailable/);
-  assert.deepEqual(JSON.parse(withCache.writes[0]).exact_review_queue.scheduled_feed, {
-    target_rate_per_hour: 300,
-    enqueue_replay: "scheduled_disposition_v1",
-  });
-  const persisted = JSON.parse(withCache.writes[0]);
-  assert.equal(persisted.freshness.state, "stale");
-  assert.ok(persisted.freshness.age_ms > persisted.freshness.maximum_age_ms);
-  assert.match(String(withCache.elements.get("updated")?.textContent), /stale snapshot/);
-  assert.equal(typeof persisted.freshness.client_checked_at, "string");
-  assert.doesNotMatch(JSON.stringify([...withCache.elements.values()]), new RegExp(marker, "i"));
-
-  const withoutCache = await run(null);
-  assert.equal(withoutCache.removed, false);
-  assert.equal(withoutCache.writes.length, 0);
-  assert.equal(withoutCache.elements.get("subtitle")?.textContent, "Failed to load public status.");
-  assert.doesNotMatch(JSON.stringify([...withoutCache.elements.values()]), new RegExp(marker, "i"));
-
-  const invalidCache = await run(`{"invalid":"${marker}"`);
-  assert.equal(invalidCache.removed, true);
-  assert.equal(invalidCache.writes.length, 0);
-  assert.doesNotMatch(JSON.stringify([...invalidCache.elements.values()]), new RegExp(marker, "i"));
-
-  for (const complete of [
-    [true, true],
-    [true, false],
-    [false, true],
-    [false, false],
-  ]) {
-    for (const idle of [false, true]) {
-      const events = publicRecentDurablePublicationEventsProjection(
-        publicationEventsFixture(Date.now(), complete, idle),
-      )!;
-      const expected = {
-        window: { id: events.window.id },
-        collection: { state: events.collection.state },
-        direct: { counts: { accepted: events.direct.counts.accepted } },
-        batch: { counts: { retryable: events.batch.counts.retryable } },
-      };
-      const status = {
-        ...publicationStatusFixture(),
-        recent_durable_publication_events: { ...events, private_marker: marker },
-      };
-      const fetched = await run(null, status);
-      const stored = fetched.writes.at(-1)!;
-      assert.deepEqual(JSON.parse(stored).recent_durable_publication_events, expected);
-      assert.equal(stored.includes(marker), false);
-      const reloaded = await run(stored);
-      assert.deepEqual(
-        JSON.parse(reloaded.writes.at(-1)!).recent_durable_publication_events,
-        expected,
-      );
-      for (const result of [fetched, reloaded]) {
-        const rendered = String(
-          result.elements.get("recent-durable-publication-events")?.innerHTML,
-        );
-        assert.match(rendered, /Trailing 24h window/);
-        assert.ok(
-          rendered.includes(`<strong>${expected.direct.counts.accepted ?? "unknown"}</strong>`),
-        );
-        assert.ok(
-          rendered.includes(`<strong>${expected.batch.counts.retryable ?? "unknown"}</strong>`),
-        );
-        assert.deepEqual(
-          JSON.parse(
-            JSON.stringify(
-              result.context.dashboardStatusSnapshot(result.context.dashboardStatusSnapshot(status))
-                .recent_durable_publication_events,
-            ),
-          ),
-          expected,
-        );
-      }
-    }
-  }
-
-  const browser = withoutCache.context;
-  const project = (events: unknown) =>
-    JSON.parse(
-      JSON.stringify(
-        browser.dashboardStatusSnapshot({
-          ...publicationStatusFixture(),
-          recent_durable_publication_events: events,
-        }).recent_durable_publication_events,
-      ),
-    );
-  assert.equal(project(null), null);
-  assert.equal(project(undefined), null);
-  for (const count of [undefined, null, -1, 0.5, 10_001, "1", NaN, Infinity]) {
-    for (const [lane, outcome] of [
-      ["direct", "accepted"],
-      ["batch", "retryable"],
-    ]) {
-      const events = publicationEventsFixture();
-      const projected = project({ ...events, [lane]: { counts: { [outcome]: count } } });
-      assert.equal(projected[lane].counts[outcome], null);
-      assert.equal(projected.collection.state, "unknown");
-      assert.deepEqual(project(projected), projected);
-    }
-  }
-  const bounded = project({
-    ...publicationEventsFixture(),
-    direct: { counts: { accepted: 10_000 } },
-    batch: { counts: { retryable: 10_000 } },
-  });
-  assert.equal(bounded.direct.counts.accepted, 10_000);
-  assert.equal(bounded.batch.counts.retryable, 10_000);
-  const closed = project({
-    ...publicationEventsFixture(),
-    window: { id: marker },
-    collection: { state: marker },
-    direct: { counts: {} },
-    batch: { counts: {} },
-  });
-  assert.deepEqual(closed, {
-    window: { id: null },
-    collection: { state: "unknown" },
-    direct: { counts: { accepted: null } },
-    batch: { counts: { retryable: null } },
-  });
-  assert.equal(JSON.stringify(closed).includes(marker), false);
-});
-
-test("dashboard reprojects separately fetched public observability before rendering", async () => {
-  const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/"));
-  const html = await response.text();
-  const script = [...html.matchAll(/<script>\n([\s\S]*?)\n<\/script>/g)].at(-1)?.[1];
-  assert.ok(script);
-
-  const elements = new Map<string, Record<string, any>>();
-  const elementFor = (id: string) => {
-    if (!elements.has(id)) {
-      elements.set(id, {
-        addEventListener: () => undefined,
-        className: "",
-        dataset: {},
-        id,
-        innerHTML: "",
-        open: false,
-        showModal() {
-          this.open = true;
-        },
-        close() {
-          this.open = false;
-        },
-        style: {},
-        textContent: "",
-      });
-    }
-    return elements.get(id)!;
-  };
-  let nextPayload: unknown = null;
-  const context = createContext({
-    console,
-    document: {
-      addEventListener: () => undefined,
-      body: { classList: { add: () => undefined, remove: () => undefined } },
-      documentElement: { dataset: {} },
-      getElementById: elementFor,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-    },
-    fetch: async (input: string) => {
-      if (input === "/api/status") return { ok: false, status: 503 };
-      return {
-        ok: true,
-        status: 200,
-        json: async () => structuredClone(nextPayload),
-      };
-    },
-    history: { replaceState: () => undefined },
-    localStorage: {
-      getItem: () => null,
-      removeItem: () => undefined,
-      setItem: () => undefined,
-    },
-    location: { hash: "", pathname: "/", search: "" },
-    navigator: { clipboard: { writeText: async () => undefined } },
-    setInterval: () => 1,
-    setTimeout: () => 1,
-    URLSearchParams,
-    window: { addEventListener: () => undefined },
-  });
-  new Script(script).runInContext(context);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  const clientNow = Date.now();
-  const clockSkewedStatus = context.dashboardStatusSnapshot({
-    schema_version: 1,
-    generated_at: new Date(clientNow + 30_000).toISOString(),
-    freshness: {
-      state: "fresh",
-      cache_state: "fresh",
-      generated_at: new Date(clientNow + 30_000).toISOString(),
-      age_ms: 0,
-      maximum_age_ms: 60_000,
-    },
-  });
-  assert.equal(clockSkewedStatus.freshness.state, "fresh");
-  assert.equal(typeof clockSkewedStatus.freshness.client_checked_at, "string");
-  assert.equal(context.dashboardStatusSnapshot(clockSkewedStatus).freshness.state, "fresh");
-
-  const validApply = dashboardApplyObservabilityFixture();
-  nextPayload = validApply;
-  await context.loadApplyObservability();
-  assert.match(elementFor("apply-observability-summary").innerHTML, /Observed.*24h window/);
-  assert.match(elementFor("apply-observability-body").innerHTML, /8 \/ 5/);
-  assert.match(elementFor("apply-observability-body").innerHTML, /workflow_failure/);
-
-  new Script(`lastData = dashboardStatusSnapshot({
-    schema_version: 1,
-    generated_at: new Date().toISOString(),
-    fleet: {}, workers: [], automatic_work: [], pipeline: [], bay: {}, recent: {},
-    diagnostics: { errors: [], error_count: 0 }
-  })`).runInContext(context);
-  const validCoverage = dashboardReviewCoverageFixture();
-  nextPayload = validCoverage;
-  await context.loadReviewCoverage();
-  assert.match(elementFor("review-coverage-note").textContent, /60 of 80.*75%/);
-  assert.match(elementFor("review-coverage-body").innerHTML, /<strong>75%<\/strong>/);
-  assert.match(elementFor("health-strip").innerHTML, /7d coverage.*75%/);
-
-  const validHistory = dashboardHealthHistoryFixture();
-  nextPayload = validHistory;
-  await context.loadHealthHistory("6h", true);
-  assert.equal(context.exactReviewHistory("review")[0].pending, 4);
-  assert.equal(context.stateWriterHistorySamples()[0].wait.p50, 10);
-  assert.equal(context.stateWriterCoordinatorHistorySamples()[0].queued, 2);
-
-  const marker = "synthetic-public-observability-marker";
-  const markerUrl = `https://invalid.example/${marker}?repo=${marker}&token=${marker}`;
-  const markerHash = "0f".repeat(20);
-  for (const malformed of [
-    { ...validApply, range: marker },
-    {
-      ...validApply,
-      failures: { ...validApply.failures, last_failure_kind: marker },
-    },
-    {
-      ...validApply,
-      failures: { ...validApply.failures, last_failure_at: markerUrl },
-    },
-    { ...validApply, queue: { ...validApply.queue, active: { identity: markerUrl } } },
-    { ...validApply, event_count: 10_000_001 },
-    { ...validApply, totals: { ...validApply.totals, net_drain: 999 } },
-  ]) {
-    assert.equal(context.dashboardApplyObservabilitySnapshot(malformed), null);
-  }
-  for (const malformed of [
-    { ...validCoverage, generated_at: markerUrl },
-    { ...validCoverage, inventory_status: "missing" },
-    {
-      ...validCoverage,
-      totals: { ...validCoverage.totals, coverage_percent: marker },
-    },
-    {
-      ...validCoverage,
-      totals: { ...validCoverage.totals, reviewed_recent: 81 },
-    },
-    {
-      ...validCoverage,
-      totals: { ...validCoverage.totals, stale: { identity: markerUrl } },
-    },
-    {
-      ...validCoverage,
-      totals: { ...validCoverage.totals, open_records: 10_000_001 },
-    },
-  ]) {
-    assert.equal(context.dashboardReviewCoverageSnapshot(malformed), null);
-  }
-  const invalidHistorySample = {
-    ...validHistory,
-    samples: validHistory.samples.map((sample) => ({
-      ...sample,
-      state_writer: {
-        ...sample.state_writer,
-        wait_ms: { ...sample.state_writer.wait_ms, p50: markerUrl },
-      },
-    })),
-  };
-  const projectedHistoryGeneratedAt = Date.now();
-  const projectedHistory = {
-    ...validHistory,
-    generated_at: new Date(projectedHistoryGeneratedAt).toISOString(),
-    ...publicHealthHistoryContract("6h", validHistory.samples, projectedHistoryGeneratedAt),
-  };
-  const unavailableHistory = {
-    ...validHistory,
-    generated_at: null,
-    coverage: {
-      state: "unavailable",
-      expected_slots: null,
-      observed_slots: null,
-      usable_slots: null,
-      failed_slots: null,
-      missing_slots: null,
-      coverage_percent: null,
-      largest_gap_slots: null,
-      largest_gap_ms: null,
-      window_started_at: null,
-      window_ended_at: null,
-    },
-    freshness: {
-      state: "unavailable",
-      latest_sample_at: null,
-      age_ms: null,
-      maximum_age_ms: 720_000,
-    },
-    samples: [],
-  };
-  assert.deepEqual(
-    JSON.parse(JSON.stringify(context.dashboardHealthHistorySnapshot(unavailableHistory, "6h"))),
-    unavailableHistory,
-  );
-  for (const malformed of [
-    { samples: validHistory.samples },
-    { ...validHistory, range: marker },
-    { ...validHistory, retention_days: "7" },
-    invalidHistorySample,
-    {
-      ...validHistory,
-      samples: validHistory.samples.map((sample) => ({ ...sample, at: markerUrl })),
-    },
-    {
-      ...validHistory,
-      samples: validHistory.samples.map((sample) => ({
-        ...sample,
-        exact_review: {
-          ...sample.exact_review,
-          review: { ...sample.exact_review.review, pending: "4" },
-        },
-      })),
-    },
-    {
-      ...validHistory,
-      samples: Array.from({ length: 74 }, (_, index) => ({
-        ...validHistory.samples[0],
-        at: new Date(Date.parse(validHistory.samples[0].at) + index * 5 * 60_000).toISOString(),
-      })),
-    },
-    { ...validHistory, samples: [validHistory.samples[0], validHistory.samples[0]] },
-    {
-      ...projectedHistory,
-      freshness: {
-        ...projectedHistory.freshness,
-        state: projectedHistory.freshness.state === "fresh" ? "stale" : "fresh",
-      },
-    },
-    {
-      ...projectedHistory,
-      freshness: {
-        ...projectedHistory.freshness,
-        age_ms: Number(projectedHistory.freshness.age_ms) + 1,
-      },
-    },
-    { ...unavailableHistory, samples: validHistory.samples },
-    {
-      ...unavailableHistory,
-      coverage: { ...unavailableHistory.coverage, expected_slots: 0 },
-    },
-    {
-      ...unavailableHistory,
-      freshness: { ...unavailableHistory.freshness, age_ms: 0 },
-    },
-  ]) {
-    assert.equal(context.dashboardHealthHistorySnapshot(malformed, "6h"), null);
-  }
-
-  nextPayload = {
-    ...validApply,
-    range: marker,
-    generated_at: markerUrl,
-    failures: {
-      ...validApply.failures,
-      last_failure_kind: marker,
-      last_failure_at: markerUrl,
-      nested: { identity: marker, hash: markerHash },
-    },
-    error: `${marker} ${markerUrl}`,
-  };
-  await context.loadApplyObservability();
-  assert.equal(
-    elementFor("apply-observability-summary").innerHTML,
-    '<span class="review-status degraded">Telemetry unavailable</span>',
-  );
-  assert.equal(
-    elementFor("apply-observability-body").innerHTML,
-    '<div class="empty">Durable apply telemetry could not be loaded.</div>',
-  );
-
-  nextPayload = {
-    ...validCoverage,
-    totals: { ...validCoverage.totals, coverage_percent: markerUrl, nested: { hash: markerHash } },
-    error: marker,
-  };
-  await context.loadReviewCoverage();
-  assert.equal(
-    elementFor("review-coverage-body").innerHTML,
-    '<div class="empty">Review coverage is unavailable. The canonical record store could not be reached.</div>',
-  );
-  assert.doesNotMatch(elementFor("health-strip").innerHTML, /7d coverage/);
-
-  nextPayload = { ...invalidHistorySample, error: marker, nested: { hash: markerHash } };
-  await context.loadHealthHistory("6h", true);
-  assert.equal(context.exactReviewHistory("review").length, 0);
-  assert.equal(context.stateWriterHistorySamples().length, 0);
-  assert.equal(context.stateWriterCoordinatorHistorySamples().length, 0);
-
-  const rendered = JSON.stringify([
-    elementFor("apply-observability-summary"),
-    elementFor("apply-observability-body"),
-    elementFor("automerge-meta"),
-    elementFor("automerge-product"),
-    elementFor("review-coverage-note"),
-    elementFor("review-coverage-body"),
-    elementFor("health-strip"),
-    elementFor("exact-review-lanes"),
-    elementFor("state-writer-health"),
-  ]);
-  assert.doesNotMatch(rendered, new RegExp(marker, "i"));
-  assert.doesNotMatch(rendered, /invalid\.example|repo=|token=/i);
-  assert.equal(rendered.includes(markerHash), false);
-});
-
-test("dashboard hero treats apply and exact-review handoff health as attention", async () => {
-  const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai/"));
-  const html = await response.text();
-  const script = [...html.matchAll(/<script>\n([\s\S]*?)\n<\/script>/g)].at(-1)?.[1];
-  assert.ok(script);
-
-  const elements = new Map();
-  const elementFor = (id) => {
-    if (!elements.has(id)) {
-      elements.set(id, {
-        addEventListener: () => undefined,
-        className: "",
-        close() {
-          this.open = false;
-        },
-        dataset: {},
-        id,
-        innerHTML: "",
-        open: false,
-        showModal() {
-          this.open = true;
-        },
-        style: {},
-        textContent: "",
-      });
-    }
-    return elements.get(id);
-  };
-  const status = {
-    schema_version: 1,
-    generated_at: "2026-07-05T11:22:43.934Z",
-    source: { target_repositories: ["openclaw/openclaw"] },
-    health: {
-      attempts: 0,
-      error_rate_percent: 0,
-      failed_attempts: 0,
-      failures: [],
-      recovered_failures: 0,
-      recovery_rate_percent: 100,
-      unresolved_failures: 0,
-    },
-    fleet: {
-      active_codex_jobs: 0,
-      active_workflow_runs: 0,
-      budget_used_percent: 0,
-      queued_workflow_runs: 0,
-      support_queued_workflow_runs: 0,
-      support_workflow_runs: 0,
-      worker_budget: 128,
-      worker_detail_fallbacks: 0,
-    },
-    workers: [],
-    automatic_work: [],
-    pipeline: [],
-    control_plane: {
-      publishers: { running: 2, waiting: 1 },
-      comment_routers: { running: 3, waiting: 4 },
-      reconcilers: { running: 1, waiting: 0 },
-    },
-    exact_review_queue: {
-      pending: 4,
-      ready_pending: 3,
-      admissible_pending: 2,
-      lanes: {
-        review: {
-          pending: 4,
-          ready: 3,
-          backoff: 1,
-          dispatching: 2,
-          leased: 10,
-          active: 12,
-          capacity: 64,
-          available_slots: 52,
-          oldest_pending_age_seconds: 60,
-          flow: {
-            last_15_minutes: {
-              arrival_rate_per_hour: 24,
-              successful_rate_per_hour: 20,
-              retried_rate_per_hour: 4,
-              shed_rate_per_hour: 0,
-              retry_amplification: 0.2,
-            },
-          },
-        },
-        publication: {
-          pending: 2,
-          ready: 1,
-          backoff: 1,
-          dispatching: 1,
-          leased: 20,
-          active: 21,
-          capacity: 24,
-          available_slots: 3,
-          oldest_pending_age_seconds: 30,
-          oldest_ready_age_seconds: 30,
-          oldest_backoff_age_seconds: 20,
-          flow: {
-            last_15_minutes: {
-              arrival_rate_per_hour: 12,
-              resolved_rate_per_hour: 20,
-              published_rate_per_hour: 4,
-              superseded_rate_per_hour: 16,
-              retried_rate_per_hour: 8,
-              dead_lettered_rate_per_hour: 0,
-              retry_amplification: 0.4,
-            },
-          },
-          dead_letters: {
-            open: 2,
-            oldest_failed_at: "2026-07-05T10:22:43.934Z",
-          },
-          capacity_control: {
-            mode: "throttled",
-            base: 24,
-            maximum: 48,
-            ceiling: 24,
-            demand_capacity: 32,
-            cooldown_until: "2026-07-05T12:00:00.000Z",
-            last_failure_kind: "github_rate_limit",
-          },
-        },
-      },
-      pressure: {
-        status: "congested",
-        reason: "capacity_full_with_backlog",
-        capacity: 28,
-        active: 28,
-        pending: 4,
-        ready_pending: 3,
-        admissible_pending: 2,
-      },
-      handoff_health: {
-        status: "healthy",
-        message: "Dispatch-to-claim handoffs are within the expected window.",
-        available_slots: 2,
-        capacity: 28,
-        stalled_after_seconds: 300,
-        phases: {
-          pending: { count: 4, oldest_age_seconds: 60 },
-          dispatching: { count: 2, oldest_age_seconds: 10 },
-          leased: { count: 24, oldest_age_seconds: 240 },
-        },
-      },
-      bay_projection: {
-        complete: true,
-        sample_limit: 24,
-        total: 2,
-        stages: {
-          arriving: 0,
-          "setting-up": 0,
-          reviewing: 1,
-          publishing: 1,
-          applying: 0,
-          repairing: 0,
-        },
-        activity: {
-          complete: true,
-          total: 2,
-          queue_stages: {
-            arriving: 0,
-            "setting-up": 0,
-            reviewing: 1,
-            publishing: 0,
-            applying: 0,
-            repairing: 0,
-          },
-          live_stages: {
-            arriving: 0,
-            "setting-up": 0,
-            reviewing: 0,
-            publishing: 1,
-            applying: 0,
-            repairing: 0,
-          },
-          items: [
-            {
-              repository: "OpenClaw/OpenClaw",
-              item_number: 123,
-              stage: "reviewing",
-              source: "queue",
-              title: "SYNTHETIC_OVERVIEW_PRIVATE_TITLE",
-              url: "https://invalid.example/SYNTHETIC_OVERVIEW_PRIVATE_URL?token=1",
-              failure_key: "SYNTHETIC_OVERVIEW_PRIVATE_FAILURE",
-              action: {
-                repository: "openclaw/clawsweeper",
-                run_id: 7001,
-                job_id: 8001,
-                status: "in_progress",
-                started_at: "2026-07-05T11:20:00.000Z",
-                steps_complete: true,
-                steps: [
-                  {
-                    sequence: 1,
-                    kind: "setup",
-                    status: "completed",
-                    conclusion: "success",
-                    name: "SYNTHETIC_OVERVIEW_PRIVATE_STEP",
-                  },
-                  {
-                    sequence: 2,
-                    kind: "review",
-                    status: "in_progress",
-                    conclusion: null,
-                    name: "SYNTHETIC_OVERVIEW_PRIVATE_CURRENT_STEP",
-                  },
-                ],
-                run_url: "https://invalid.example/SYNTHETIC_OVERVIEW_PRIVATE_ACTION?token=1",
-              },
-            },
-            {
-              repository: "openclaw/clawhub",
-              item_number: 456,
-              stage: "publishing",
-              source: "live",
-            },
-          ],
-        },
-      },
-    },
-    diagnostics: { errors: [], exact_review_queue_error: null as string | null },
-    recent: {
-      apply_health: {
-        attention_count: 1,
-        items: [
-          {
-            attention_reasons: ["cursor_required_but_missing_after_full_window"],
-            closed: 0,
-            comment_synced: 0,
-            cursor: null,
-            cursor_required: true,
-            cycle: null,
-            lanes: {
-              closure: {
-                closed: 0,
-                comment_synced: 0,
-                processed: 2,
-                skip_reasons: { skipped_changed_since_review: 2 },
-                skipped: 2,
-              },
-              comment_sync: {
-                closed: 0,
-                comment_synced: 0,
-                processed: 0,
-                skip_reasons: {},
-                skipped: 0,
-              },
-            },
-            mode: "close",
-            next_action_buckets: { review_refresh: 2 },
-            next_actions: [
-              {
-                bucket: "review_refresh",
-                count: 2,
-                label: "Refresh review",
-                next_step: "Queue a fresh ClawSweeper review before any close retry.",
-                owner: "clawsweeper",
-                reason: "skipped_changed_since_review",
-                retryable: true,
-                summary: "The item changed after review.",
-              },
-            ],
-            processed: 2,
-            run_url: "https://github.com/openclaw/clawsweeper/actions/runs/99",
-            skip_reasons: { skipped_changed_since_review: 2 },
-            skipped: 2,
-            status: "needs_attention",
-            target_repo: "openclaw/openclaw",
-            updated_at: "2026-07-05T11:22:03.748Z",
-          },
-        ],
-      },
-      closed_items: [],
-      closed_stats: { issues: 0, prs: 0, total: 0, window_hours: 24 },
-      events: [],
-      operation_counts: {},
-    },
-  };
-
-  const dashboardLocation = { hash: "", pathname: "/", search: "" };
-  const context = createContext({
-    console,
-    document: {
-      addEventListener: () => undefined,
-      body: { classList: { add: () => undefined, remove: () => undefined } },
-      documentElement: { dataset: {} },
-      getElementById: elementFor,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-    },
-    fetch: async () => ({
-      headers: { get: () => "fresh" },
-      json: async () => status,
-      ok: true,
-      status: 200,
-    }),
-    history: { replaceState: () => undefined },
-    localStorage: {
-      getItem: () => null,
-      setItem: () => undefined,
-    },
-    location: dashboardLocation,
-    navigator: { clipboard: { writeText: async () => undefined } },
-    setInterval: () => 1,
-    setTimeout: () => 1,
-    window: { addEventListener: () => undefined },
-  });
-  new Script(script).runInContext(context);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  const refreshReview = context.applyHealthRecommendedAction(
-    { target_repo: "openclaw/clawhub", mode: "close" },
-    "skipped_changed_since_review",
-  );
-  assert.equal(
-    refreshReview.command,
-    "gh workflow run review-plan.yml --repo openclaw/clawsweeper -f target_repo=openclaw/clawhub",
-  );
-  assert.equal(
-    refreshReview.url,
-    "https://github.com/openclaw/clawsweeper/actions/workflows/review-plan.yml",
-  );
-  for (const mode of ["close", "comment_sync"]) {
-    const apply = context.applyHealthRecommendedAction(
-      { target_repo: "openclaw/clawhub", mode },
-      "skipped_runtime_budget",
-    );
-    assert.match(apply.command, /^gh workflow run sweep\.yml /);
-    assert.match(apply.command, /-f apply_existing=true/);
-    assert.equal(apply.url, "https://github.com/openclaw/clawsweeper/actions/workflows/sweep.yml");
-  }
-
-  const freshnessTimestamp = new Date(Date.now() - 1_000).toISOString();
-  for (const state of ["fresh", "stale"]) {
-    context.renderDashboard(
-      {
-        ...status,
-        generated_at: freshnessTimestamp,
-        freshness: {
-          state,
-          cache_state: state,
-          generated_at: freshnessTimestamp,
-          age_ms: 1_000,
-          maximum_age_ms: 60_000,
-        },
-      },
-      "",
-    );
-    assert.equal(
-      elementFor("updated").textContent,
-      "Updated " +
-        context.since(freshnessTimestamp) +
-        (state === "stale" ? " · stale snapshot" : ""),
-    );
-  }
-  context.renderDashboard(
-    {
-      ...status,
-      freshness: {
-        state: "unavailable",
-        cache_state: "miss",
-        generated_at: null,
-        age_ms: null,
-        maximum_age_ms: 60_000,
-      },
-    },
-    "GitHub telemetry is incomplete.",
-  );
-  assert.equal(
-    elementFor("updated").textContent,
-    "Status freshness unavailable · GitHub telemetry is incomplete.",
-  );
-  context.renderDashboard(status, "");
-
-  const projectedDiagnostics = context.dashboardStatusSnapshot({
-    schema_version: 1,
-    generated_at: "2026-07-05T11:22:43.934Z",
-    diagnostics: {
-      errors: ["telemetry_unavailable", "synthetic unbounded error text"],
-      error_count: 2,
-    },
-  });
-  assert.equal(
-    JSON.stringify(projectedDiagnostics.diagnostics),
-    JSON.stringify({
-      errors: ["telemetry_unavailable", "telemetry_unavailable"],
-      error_count: 2,
-    }),
-  );
-  assert.equal(
-    JSON.stringify(projectedDiagnostics).includes("synthetic unbounded error text"),
-    false,
-  );
-  const malformedDiagnostics = context.dashboardStatusSnapshot({
-    schema_version: 1,
-    generated_at: "2026-07-05T11:22:43.934Z",
-    diagnostics: { errors: { nested: "synthetic malformed error" }, error_count: 0 },
-  });
-  assert.equal(malformedDiagnostics.diagnostics.error_count, 1);
-  assert.equal(malformedDiagnostics.diagnostics.errors[0], "telemetry_unavailable");
-  assert.equal(JSON.stringify(malformedDiagnostics).includes("synthetic malformed error"), false);
-  for (const generatedAt of [
-    "1171",
-    "https://example.invalid/private?timestamp=1",
-    "2026-07-05T11:22:43.934Z".repeat(3),
-  ]) {
-    assert.equal(
-      context.dashboardStatusSnapshot({ schema_version: 1, generated_at: generatedAt }),
-      null,
-    );
-  }
-
-  assert.equal(elementFor("hero-dot").className, "hero-dot amber");
-  assert.match(elementFor("hero-headline").textContent, /^Needs attention/);
-  assert.match(elementFor("public-reference-summary").textContent, /2 verified public references/);
-  const publicReferenceHtml = elementFor("public-references").innerHTML;
-  assert.match(publicReferenceHtml, /openclaw\/openclaw#123/);
-  assert.match(publicReferenceHtml, /openclaw\/clawhub#456/);
-  assert.doesNotMatch(publicReferenceHtml, /https:\/\/github\.com/);
-  assert.match(publicReferenceHtml, /data-public-reference-key/);
-  assert.doesNotMatch(publicReferenceHtml, /SYNTHETIC_OVERVIEW_PRIVATE/i);
-  assert.doesNotMatch(publicReferenceHtml, /invalid\.example|token=/i);
-  context.renderPublicReferenceDialog(
-    {
-      repository: "openclaw/openclaw",
-      item_number: 123,
-      stage: "reviewing",
-      source: "queue",
-      title: "SYNTHETIC_OVERVIEW_PRIVATE_BLADE",
-      item_url: "https://invalid.example/private?token=SYNTHETIC_OVERVIEW_PRIVATE_BLADE",
-      failure_key: "SYNTHETIC_OVERVIEW_PRIVATE_BLADE",
-      action: {
-        repository: "openclaw/clawsweeper",
-        run_id: 7001,
-        job_id: 8001,
-        status: "in_progress",
-        started_at: "2026-07-05T11:20:00.000Z",
-        steps_complete: true,
-        steps: [
-          { sequence: 1, kind: "setup", status: "completed", conclusion: "success" },
-          { sequence: 2, kind: "review", status: "in_progress", conclusion: null },
-        ],
-      },
-    },
-    "openclaw/openclaw#123",
-  );
-  const publicReferenceBlade =
-    elementFor("worker-dialog-heading").innerHTML + elementFor("worker-dialog-body").innerHTML;
-  assert.equal(elementFor("worker-dialog").open, true);
-  assert.match(publicReferenceBlade, /openclaw\/openclaw#123/);
-  assert.match(publicReferenceBlade, /Bounded queue sample/);
-  assert.match(publicReferenceBlade, /https:\/\/github\.com\/openclaw\/openclaw\/issues\/123/);
-  assert.match(publicReferenceBlade, /https:\/\/github\.com\/openclaw\/openclaw/);
-  assert.match(
-    publicReferenceBlade,
-    /https:\/\/github\.com\/openclaw\/clawsweeper\/actions\/runs\/7001\/job\/8001/,
-  );
-  assert.match(
-    publicReferenceBlade,
-    /https:\/\/github\.com\/openclaw\/clawsweeper\/actions\/runs\/7001/,
-  );
-  assert.match(publicReferenceBlade, /Set up job/);
-  assert.match(publicReferenceBlade, /Run review/);
-  assert.match(publicReferenceBlade, /class="step-row in_progress"/);
-  assert.match(publicReferenceBlade, /2 steps/);
-  assert.doesNotMatch(
-    publicReferenceBlade,
-    /SYNTHETIC_OVERVIEW_PRIVATE_BLADE|invalid\.example|token=/i,
-  );
-  dashboardLocation.hash = "#public-reference-%";
-  assert.doesNotThrow(() => context.openWorkerFromHash());
-  assert.equal(elementFor("worker-dialog").open, false);
-  const projectedPublicReferences = context.dashboardStatusSnapshot(status);
-  assert.equal(
-    JSON.stringify(projectedPublicReferences.exact_review_queue.bay_projection.activity.items),
-    JSON.stringify([
-      {
-        repository: "openclaw/openclaw",
-        item_number: 123,
-        stage: "reviewing",
-        source: "queue",
-        action: {
-          repository: "openclaw/clawsweeper",
-          run_id: 7001,
-          job_id: 8001,
-          status: "in_progress",
-          started_at: "2026-07-05T11:20:00.000Z",
-          steps_complete: true,
-          steps: [
-            { sequence: 1, kind: "setup", status: "completed", conclusion: "success" },
-            { sequence: 2, kind: "review", status: "in_progress", conclusion: null },
-          ],
-        },
-      },
-      {
-        repository: "openclaw/clawhub",
-        item_number: 456,
-        stage: "publishing",
-        source: "live",
-      },
-    ]),
-  );
-  assert.doesNotMatch(JSON.stringify(projectedPublicReferences), /SYNTHETIC_OVERVIEW_PRIVATE/i);
-  assert.equal(
-    context.dashboardPublicBayReferences([
-      { repository: "openclaw/openclaw", item_number: "123", stage: "reviewing", source: "queue" },
-    ]).length,
-    0,
-  );
-  assert.equal(
-    context.dashboardPublicBayReferences(
-      Array.from({ length: 125 }, (_, index) => ({
-        repository: "openclaw/openclaw",
-        item_number: index + 1,
-        stage: "reviewing",
-        source: "queue",
-      })),
-    ).length,
-    0,
-  );
-  new Script('publicReferenceQuery = "123"; renderPublicReferences(lastData);').runInContext(
-    context,
-  );
-  assert.match(elementFor("public-reference-summary").textContent, /1 match/);
-  assert.match(elementFor("public-references").innerHTML, /openclaw\/openclaw#123/);
-  assert.doesNotMatch(elementFor("public-references").innerHTML, /openclaw\/clawhub#456/);
-  new Script(
-    'publicReferenceQuery = "openclaw/clawhub#456"; renderPublicReferences(lastData);',
-  ).runInContext(context);
-  assert.match(elementFor("public-references").innerHTML, /openclaw\/clawhub#456/);
-  assert.doesNotMatch(elementFor("public-references").innerHTML, /openclaw\/openclaw#123/);
-  new Script(
-    'publicReferenceQuery = "not-a-reference"; renderPublicReferences(lastData);',
-  ).runInContext(context);
-  assert.match(
-    elementFor("public-reference-summary").textContent,
-    /Enter a number or owner\/repo#number/,
-  );
-  assert.match(elementFor("public-references").innerHTML, /No matching public reference/);
-  new Script('publicReferenceQuery = ""; renderPublicReferences(lastData);').runInContext(context);
-  assert.match(elementFor("apply-health").innerHTML, /Pruning sweep blocked/);
-  status.recent.closed_items = {};
-  assert.doesNotThrow(() => context.renderDashboard(status, ""));
-  assert.match(
-    elementFor("closed").innerHTML,
-    /Individual close details are unavailable; aggregate counts remain above\./,
-  );
-  status.recent.closed_items = [];
-  assert.match(elementFor("exact-review-handoff").innerHTML, /Dispatching/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /Pending<\/span><strong>4<\/strong>/);
-  assert.match(
-    elementFor("exact-review-handoff").innerHTML,
-    /Dispatching<\/span><strong>2<\/strong>/,
-  );
-  assert.match(elementFor("exact-review-handoff").innerHTML, /Leased<\/span><strong>24<\/strong>/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /2 of 28 exact-review slots open/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /health-badge healthy/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /pressure congested/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /4 total · 3 ready · 2 admissible/);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /Review admission/);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /52 review admission slots open/);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /Result publication/);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /3 result publication slots open/);
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /<div class="exact-lane-head"><strong>State writer<\/strong><span>Unavailable<\/span><\/div>/,
-  );
-  context.renderStateWriter({
-    lanes: {
-      publication: {
-        batches: { enabled: true, max_items: 2 },
-        active: 0,
-        leased: 0,
-        dispatching: 0,
-        flow: {
-          last_15_minutes: {
-            resolved: 16,
-            published: 0,
-            superseded: 16,
-            retried: 0,
-            dead_lettered: 0,
-          },
-        },
-      },
-    },
-    state_writer: {
-      collection: { status: "stale", last_observed_at: "2026-07-21T12:12:42.397Z" },
-      coordinator: {
-        queued: 0,
-        leased: 0,
-        admitted: 16,
-        completed: 16,
-        expired: 0,
-        recovered: 0,
-        last_wait_ms: 0,
-        max_wait_ms: 300_309,
-      },
-      global_lease: { status: "free" },
-      last_60_minutes: {
-        materialized_items: 0,
-        state_commits: 0,
-        items_per_commit: null,
-        wait_ms: { p50: null, p95: null, samples: 0 },
-        hold_ms: { p50: null, p95: null, samples: 0 },
-      },
-      live: { freshness_seconds: null, tracked_holding: 0, tracked_waiting: 0 },
-      mode: "unknown",
-    },
-  });
-  const stateWriterHtml = elementFor("state-writer-health").innerHTML;
-  assert.match(stateWriterHtml, /class="exact-lane-head"/);
-  assert.match(stateWriterHtml, /Batch · configured 2 · coordinator live · 6h/);
-  assert.match(
-    stateWriterHtml,
-    /Serialization queue<\/span><strong>0 active · 0 queued · 1 writer max/,
-  );
-  assert.doesNotMatch(stateWriterHtml, /Git crash fence/);
-  assert.match(stateWriterHtml, /Coordinator turns<\/dt><dd>16 completed · 16 admitted/);
-  assert.match(stateWriterHtml, /Coordinator wait<\/dt><dd>last 0s · max 5m/);
-  assert.match(stateWriterHtml, /Queue history<\/dt><dd>collecting samples/);
-  assert.match(
-    stateWriterHtml,
-    /Terminal telemetry<\/dt><dd>idle · no exact-review materialization required in the last 15m/,
-  );
-  assert.doesNotMatch(stateWriterHtml, /terminal telemetry stale/);
-  assert.doesNotMatch(stateWriterHtml, /Exact-review materialized/);
-
-  context.renderStateWriter({
-    lanes: {
-      publication: {
-        batches: { enabled: true, max_items: 2, leased: 1 },
-        active: 0,
-        leased: 0,
-        dispatching: 0,
-        flow: {
-          last_15_minutes: {
-            resolved: 16,
-            published: 0,
-            superseded: 16,
-            retried: 0,
-            dead_lettered: 0,
-          },
-        },
-      },
-    },
-    state_writer: {
-      collection: { status: "stale", last_observed_at: "2026-07-21T12:12:42.397Z" },
-      coordinator: {
-        queued: 2,
-        leased: 1,
-        admitted: 16,
-        completed: 16,
-        expired: 0,
-        recovered: 0,
-        last_wait_ms: 0,
-        max_wait_ms: 300_309,
-      },
-      global_lease: { status: "free" },
-      last_60_minutes: { materialized_items: 0, state_commits: 0 },
-      mode: "batch",
-    },
-  });
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /Terminal telemetry<\/dt><dd>awaiting exact-review writer result/,
-  );
-  assert.doesNotMatch(elementFor("state-writer-health").innerHTML, /terminal telemetry stale/);
-
-  context.renderStateWriter({
-    lanes: {
-      publication: {
-        batches: { enabled: true, max_items: 2 },
-        flow: {
-          last_15_minutes: {
-            resolved: 1,
-            published: 1,
-            superseded: 0,
-            retried: 0,
-            dead_lettered: 0,
-          },
-        },
-      },
-    },
-    state_writer: {
-      collection: { status: "stale", last_observed_at: "2026-07-21T12:12:42.397Z" },
-      coordinator: {
-        queued: 0,
-        leased: 0,
-        admitted: 16,
-        completed: 16,
-        expired: 0,
-        recovered: 0,
-        last_wait_ms: 0,
-        max_wait_ms: 300_309,
-      },
-      global_lease: { status: "free" },
-      last_60_minutes: { materialized_items: 0, state_commits: 0 },
-      mode: "batch",
-    },
-  });
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /Terminal telemetry<\/dt><dd>terminal telemetry stale/,
-  );
-
-  const coordinatorWriter = (trackedWaiting: number) => ({
-    collection_ok: true,
-    terminal_collection_ok: false,
-    mode: "batch",
-    tracked_holding: 1,
-    tracked_waiting: trackedWaiting,
-    accepted_operations_total: 16,
-    state_commits_total: 8,
-    materialized_items_total: 16,
-    wait_ms: { p50: null, p95: null, samples: 0 },
-    hold_ms: { p50: null, p95: null, samples: 0 },
-    last_successful_materialization_at: null,
-  });
-  const coordinatorSamples = [
-    {
-      at: new Date(Date.now() - 10 * 60_000).toISOString(),
-      state_writer: coordinatorWriter(5),
-    },
-    {
-      at: new Date(Date.now() - 5 * 60_000).toISOString(),
-      state_writer: coordinatorWriter(2),
-    },
-    { at: new Date().toISOString(), state_writer: coordinatorWriter(4) },
-  ];
-  context.fetch = async () => ({
-    ok: true,
-    json: async () => ({
-      schema_version: 1,
-      range: "6h",
-      retention_days: 7,
-      samples: coordinatorSamples,
-    }),
-  });
-  await context.loadHealthHistory("6h", true);
-  context.renderStateWriter({
-    lanes: { publication: { batches: { enabled: true, max_items: 2 } } },
-    state_writer: {
-      collection: { status: "stale" },
-      coordinator: { queued: 0, leased: 0, admitted: 16, completed: 16 },
-      global_lease: { status: "free" },
-      last_60_minutes: { materialized_items: 0, state_commits: 0 },
-      mode: "batch",
-    },
-  });
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /Queue history<\/dt><dd>3 samples · 2–5 queued/,
-  );
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /Latest queue sample<\/dt><dd>1 active · 4 queued ·/,
-  );
-  assert.match(
-    elementFor("state-writer-health").innerHTML,
-    /Serialized writer queue depth over 6h/,
-  );
-  assert.doesNotMatch(elementFor("state-writer-health").innerHTML, /Exact-review materialized/);
-  assert.match(stateWriterHtml, /class="lane-metrics"/);
-  assert.doesNotMatch(stateWriterHtml, /<section class="exact-lane">/);
-  const initialLaneHtml = elementFor("exact-review-lanes").innerHTML;
-  assert.doesNotMatch(initialLaneHtml, /class="lane-flow"/);
-  assert.doesNotMatch(initialLaneHtml, /Retry amplification/);
-  assert.doesNotMatch(initialLaneHtml, /DLQ/);
-  assert.match(initialLaneHtml, /Ready<\/span><strong>3/);
-  assert.match(initialLaneHtml, /Backoff<\/span><strong>1/);
-  const workerHealthHtml = elementFor("worker-health").innerHTML;
-  assert.match(workerHealthHtml, /Attempts sampled<\/span><strong>0/);
-  assert.match(workerHealthHtml, /Failed attempts<\/span><strong>0/);
-  assert.match(workerHealthHtml, /Recovered<\/span><strong>0/);
-  assert.match(workerHealthHtml, /No worker failures in the recent sample/);
-  assert.doesNotMatch(workerHealthHtml, /Automerge|Active \/ stalled|avg runtime/);
-  assert.doesNotMatch(workerHealthHtml, /actions\/runs\//);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /target 24 · adaptive 24–24/);
-  assert.doesNotMatch(elementFor("exact-review-lanes").innerHTML, /GitHub rate limit/);
-  assert.match(elementFor("exact-review-lanes").innerHTML, /No backlog history in this range/);
-  status.workers = [
-    ...Array.from({ length: 128 }, (_, id) => ({
-      id,
-      status: "in_progress",
-      is_codex_worker: true,
-    })),
-    { id: 128, status: "in_progress", is_codex_worker: false },
-    { id: 129, status: "in_progress", is_codex_worker: false },
-  ];
-  context.renderSystemMap(status);
-  assert.match(elementFor("capacity-rail").innerHTML, /128 running/);
-  assert.doesNotMatch(elementFor("capacity-rail").innerHTML, /over budget/);
-  status.workers = [{ id: 130, status: "in_progress", is_codex_worker: false }];
-  context.renderDashboard(status, "");
-  assert.match(elementFor("hero-headline").textContent, /0 claw workers sweeping/);
-  status.workers = [];
-
-  status.recent.apply_health.items = [];
-  status.exact_review_queue.handoff_health.status = "stalled";
-  status.exact_review_queue.pressure.status = "saturated";
-  status.exact_review_queue.pressure.reason = "capacity_full_with_backlog";
-  status.exact_review_queue.handoff_health.message =
-    "A dispatched review has not been claimed within the expected handoff window.";
-  status.dashboard_health = { conclusion: "needs_attention", severity: "red" };
-  context.renderDashboard(status, "");
-
-  assert.equal(elementFor("hero-dot").className, "hero-dot red");
-  assert.match(elementFor("hero-headline").textContent, /^Needs attention/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /health-badge stalled/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /pressure saturated/);
-
-  Object.assign(status, { exact_review_queue: null });
-  status.diagnostics.exact_review_queue_error = "exact-review queue timed out";
-  status.dashboard_health = { conclusion: "needs_attention", severity: "amber" };
-  context.renderDashboard(status, "");
-
-  assert.equal(elementFor("hero-dot").className, "hero-dot amber");
-  assert.match(elementFor("hero-headline").textContent, /^Needs attention/);
-  assert.match(elementFor("exact-review-handoff").innerHTML, /telemetry unavailable/);
-
-  const healthyOperational = {
-    status: "healthy",
-    telemetry_complete: true,
-    queued_runs: 0,
-    queued_over_threshold: 0,
-    oldest_queued_minutes: 0,
-    running_runs: 0,
-    running_over_threshold: 0,
-    oldest_running_minutes: 0,
-  };
-  context.renderExecutionAlert(healthyOperational);
-  assert.equal(elementFor("execution-alert").innerHTML, "");
-  context.renderExecutionAlert({ ...healthyOperational, queued_runs: 2, queued_over_threshold: 2 });
-  assert.match(
-    elementFor("execution-alert").innerHTML,
-    /2 workflows waiting for a runner over 30m/,
-  );
-  context.renderExecutionAlert({
-    ...healthyOperational,
-    queued_runs: 2,
-    queued_over_threshold: 2,
-    approval_gated_runs: 1,
-    oldest_approval_gated_minutes: 7 * 24 * 60,
-  });
-  assert.match(
-    elementFor("execution-alert").innerHTML,
-    /1 awaiting deployment approval \(oldest 168h\)/,
-  );
-  context.renderExecutionAlert({
-    ...healthyOperational,
-    queued_runs: 2,
-    queued_over_threshold: 1,
-    wedged_rerun_runs: 1,
-    oldest_wedged_rerun_minutes: 90,
-  });
-  assert.match(
-    elementFor("execution-alert").innerHTML,
-    /1 wedged pre-queue re-run excluded from health \(oldest 1h 30m\)/,
-  );
-  context.renderExecutionAlert({
-    ...healthyOperational,
-    running_runs: 1,
-    running_over_threshold: 1,
-  });
-  assert.match(elementFor("execution-alert").innerHTML, /1 execution over 150m/);
-  context.renderExecutionAlert({ ...healthyOperational, telemetry_complete: false });
-  assert.match(elementFor("execution-alert").innerHTML, /telemetry is incomplete/);
-
-  status.diagnostics.exact_review_queue_error = null;
-  status.exact_review_queue = { handoff_health: { status: "healthy", phases: {} } };
-  status.operational_health = {
-    status: "stalled",
-    checked_at: "2026-07-05T11:22:43.934Z",
-    telemetry_complete: true,
-    queued_runs: 10,
-    queued_over_threshold: 4,
-    oldest_queued_minutes: 90,
-    running_runs: 2,
-    running_over_threshold: 1,
-    oldest_running_minutes: 180,
-  };
-  status.dashboard_health = { conclusion: "needs_attention", severity: "red" };
-  context.renderDashboard(status, "");
-
-  assert.equal(elementFor("hero-dot").className, "hero-dot red");
-  assert.doesNotMatch(elementFor("metrics").innerHTML, /over 30m|over 150m/);
-  assert.match(
-    elementFor("execution-alert").innerHTML,
-    /4 workflows waiting for a runner over 30m/,
-  );
-  assert.match(elementFor("execution-alert").innerHTML, /1 execution over 150m/);
-  assert.match(elementFor("execution-alert").innerHTML, /Total GitHub queued 10/);
-  assert.match(elementFor("execution-alert").innerHTML, /oldest running 3h/);
-
-  const scale = context.niceTrendScale(95, 4);
-  assert.equal(scale.maximum, 100);
-  assert.deepEqual([...scale.ticks], [0, 25, 50, 75, 100]);
-
-  let resolve24HourHistory: ((response: unknown) => void) | undefined;
-  const now = Date.now();
-  const samples = Array.from({ length: 25 }, (_, index) => ({
-    at: new Date(now - (24 - index) * 5 * 60_000).toISOString(),
-    exact_review: {
-      collection_ok: true,
-      review: {
-        pending: 100 + index,
-        enqueued_total: 10_000_000 + index * 8,
-        completed_total: 10_000_000 + index * 5,
-        shed_total: 0,
-      },
-      publication: {
-        pending: 200 - index,
-        enqueued_total: 10_000_000 + index * 4,
-        completed_total: 10_000_000 + index * 10,
-      },
-    },
-  }));
-  context.fetch = async (input: string) => {
-    if (input.includes("range=24h")) {
-      return new Promise((resolve) => {
-        resolve24HourHistory = resolve;
-      });
-    }
-    return {
-      ok: true,
-      json: async () => ({ schema_version: 1, range: "7d", retention_days: 7, samples }),
-    };
-  };
-  const stale24HourRequest = context.loadHealthHistory("24h", true);
-  const active7DayRequest = context.loadHealthHistory("7d", true);
-  await active7DayRequest;
-  resolve24HourHistory?.({
-    ok: true,
-    json: async () => ({ schema_version: 1, range: "24h", retention_days: 7, samples: [] }),
-  });
-  await stale24HourRequest;
-  const laneHtml = elementFor("exact-review-lanes").innerHTML;
-  assert.match(laneHtml, /Growing · \+12 in the last hour/);
-  assert.match(laneHtml, /Draining · −12 in the last hour/);
-  assert.match(laneHtml, /Net review rate/);
-  assert.match(laneHtml, /Net publication rate/);
-  assert.match(laneHtml, /Net review rate.*<\/div><strong>−36 \/ hour/);
-  assert.match(laneHtml, /Net publication rate.*<\/div><strong>\+72 \/ hour/);
-  assert.equal(laneHtml.match(/class="lane-rate-help"/g)?.length, 2);
-  assert.equal(laneHtml.match(/role="tooltip"/g)?.length, 2);
-  assert.match(laneHtml, /aria-describedby="lane-rate-help-net-review-rate"/);
-  assert.match(laneHtml, /aria-describedby="lane-rate-help-net-publication-rate"/);
-  assert.match(
-    laneHtml,
-    /Successful completions minus incoming review demand per hour\. Incoming includes newly queued work and shed demand\./,
-  );
-  assert.match(laneHtml, /Successful completions minus newly queued publication work per hour\./);
-  assert.match(laneHtml, /Falling behind/);
-  assert.match(laneHtml, /Catching up/);
-  assert.equal(laneHtml.match(/class="lane-speed"/g)?.length, 2);
-  assert.doesNotMatch(laneHtml, /Processed \/ hour|Incoming \/ hour/);
-  assert.match(
-    laneHtml,
-    /role="img" aria-label="Net review rate, completed minus incoming, over 7d"/,
-  );
-  assert.match(
-    laneHtml,
-    /role="img" aria-label="Net publication rate, completed minus incoming, over 7d"/,
-  );
-  assert.match(laneHtml, /role="img" aria-label="Review admission pending backlog over 7d"/);
-  assert.match(laneHtml, /Live snapshot unavailable/);
-  assert.match(laneHtml, /Last sampled/);
-
-  const smallAxis = context.exactReviewTrend(
-    [{ at: new Date(now).toISOString(), pending: 8 }],
-    "Small lane",
-  );
-  const largeAxis = context.exactReviewTrend(
-    [{ at: new Date(now).toISOString(), pending: 1500 }],
-    "Large lane",
-  );
-  assert.match(smallAxis, />8<\/text>/);
-  assert.match(largeAxis, />2,000<\/text>/);
-  const flowSample = (
-    minutesAgo: number,
-    enqueuedTotal: number,
-    completedTotal: number,
-    shedTotal = 0,
-  ) => ({
-    at: new Date(now - minutesAgo * 60_000).toISOString(),
-    enqueuedTotal,
-    completedTotal,
-    shedTotal,
-  });
-  const provisionalSamples = [flowSample(5, 10, 20), flowSample(0, 12, 25)];
-  const provisionalRates = context.laneSpeedHistory(provisionalSamples);
-  assert.equal(provisionalRates.length, 1);
-  assert.equal(Math.round(provisionalRates[0].rate), 36);
-  assert.equal(provisionalRates[0].provisional, true);
-  assert.equal(Math.round(provisionalRates[0].windowMinutes), 5);
-  const provisionalSpeed = context.laneSpeedTrend(provisionalSamples, "Net review rate");
-  assert.match(provisionalSpeed, /Net review rate<\/span><\/div><strong>\+36 \/ hour/);
-  assert.match(provisionalSpeed, /Catching up · provisional 5m window/);
-
-  const balancedSamples = [flowSample(5, 10, 20), flowSample(0, 10, 20)];
-  const balancedSpeed = context.laneSpeedTrend(balancedSamples, "Net review rate");
-  assert.match(balancedSpeed, /Net review rate<\/span><\/div><strong>0 \/ hour/);
-  assert.match(balancedSpeed, /Balanced · provisional 5m window/);
-  assert.doesNotMatch(balancedSpeed, /Collecting/);
-
-  const shedRates = context.laneSpeedHistory([flowSample(5, 10, 20, 2), flowSample(0, 10, 20, 3)]);
-  assert.equal(Math.round(shedRates[0].rate), -12);
-
-  const matureRates = context.laneSpeedHistory(
-    Array.from({ length: 13 }, (_, index) => flowSample((12 - index) * 5, index * 3, index * 5)),
-  );
-  assert.equal(Math.round(matureRates.at(-1).rate), 24);
-  assert.equal(matureRates.at(-1).provisional, false);
-  assert.equal(Math.round(matureRates.at(-1).windowMinutes), 60);
-
-  const gapRates = context.laneSpeedHistory([
-    flowSample(40, 0, 0),
-    flowSample(35, 1, 2),
-    flowSample(10, 2, 4),
-    flowSample(5, 3, 6),
-  ]);
-  assert.equal(gapRates.length, 2);
-  assert.notEqual(gapRates[0].segmentId, gapRates[1].segmentId);
-
-  const resetRates = context.laneSpeedHistory([
-    flowSample(20, 10, 10),
-    flowSample(15, 11, 12),
-    flowSample(10, 1, 1),
-    flowSample(5, 2, 3),
-  ]);
-  assert.equal(resetRates.length, 2);
-  assert.notEqual(resetRates[0].segmentId, resetRates[1].segmentId);
-  const resetCollecting = context.laneSpeedTrend(
-    [flowSample(10, 10, 10), flowSample(5, 11, 12), flowSample(0, 1, 1)],
-    "Net review rate",
-  );
-  assert.match(resetCollecting, /Net review rate<\/span><\/div><strong>Collecting/);
-  assert.match(resetCollecting, /Needs two continuous five-minute samples/);
-
-  const legacyBreakRates = context.laneSpeedHistory([
-    flowSample(25, 10, 10),
-    flowSample(20, 11, 12),
-    { at: new Date(now - 15 * 60_000).toISOString(), pending: 1 },
-    flowSample(10, 12, 14),
-    flowSample(5, 13, 16),
-  ]);
-  assert.equal(legacyBreakRates.length, 2);
-  assert.notEqual(legacyBreakRates[0].segmentId, legacyBreakRates[1].segmentId);
-  const speedGeometry = context.speedTrendGeometry(
-    legacyBreakRates,
-    { left: 0, top: 0, width: 100, height: 100 },
-    20,
-    now - 30 * 60_000,
-    now,
-  );
-  assert.equal(speedGeometry[1].connected, false);
-  assert.match(context.trendPath(speedGeometry), /^M.* M/);
-
-  const staleSpeed = context.laneSpeedTrend(
-    [flowSample(25, 0, 0), flowSample(20, 1, 2)],
-    "Net publication rate",
-  );
-  assert.match(staleSpeed, /Net publication rate<\/span><\/div><strong>Stale/);
-  assert.match(staleSpeed, /Stale · no rate sample in the last 12m/);
-  const collectingSpeed = context.laneSpeedTrend([flowSample(0, 0, 0)], "Net review rate");
-  assert.match(collectingSpeed, /Net review rate<\/span><\/div><strong>Collecting/);
-  assert.match(collectingSpeed, /Needs two continuous five-minute samples/);
-
-  assert.equal(
-    context.oneHourTrend(samples.slice(0, 1).map((sample) => ({ at: sample.at, pending: 4 })))
-      .label,
-    "Collecting 1h trend",
-  );
-  assert.equal(
-    context.oneHourTrend(samples.map((sample) => ({ at: sample.at, pending: 9 }))).label,
-    "Stable · no change in the last hour",
-  );
-  const broken = context.trendGeometry(
-    [
-      { at: new Date(now - 30 * 60_000).toISOString(), pending: 1 },
-      { at: new Date(now - 10 * 60_000).toISOString(), pending: 2 },
-    ],
-    "pending",
-    { left: 0, top: 0, width: 100, height: 100 },
-    2,
-    now - 60 * 60_000,
-    now,
-  );
-  assert.equal(broken[1].connected, false);
-  assert.match(context.trendPath(broken), /^M.* M/);
-});
-
-test("dashboard HTML emits early persistent theme controls", async () => {
-  for (const path of ["/", "/triage", "/pr-proof-triage"]) {
-    const response = await worker.fetch(new Request("https://clawsweeper.openclaw.ai" + path));
-    const html = await response.text();
-    const themeInit = html.indexOf('const themeKey = "clawsweeper-theme";');
-    const styles = html.indexOf("<style>");
-
-    assert.notEqual(themeInit, -1, path + " should initialize theme preference");
-    assert.notEqual(styles, -1, path + " should include CSS");
-    assert.ok(themeInit < styles, path + " should apply saved theme before styles");
-    assert.match(html, /:root\[data-theme="light"\] \{ color-scheme: light; \}/);
-    assert.match(html, /:root\[data-theme="dark"\] \{ color-scheme: dark; \}/);
-    assert.match(html, /data-theme-choice="system"/);
-    assert.match(html, /data-theme-choice="light"/);
-    assert.match(html, /data-theme-choice="dark"/);
-    assert.match(html, /window\.localStorage\?\.setItem\(themeKey, choice\)/);
-    assert.match(html, /typeof themeQuery\?\.addEventListener === "function"/);
-    assert.match(html, /themeQuery\.addEventListener\("change", updateSystemTheme\)/);
-    assert.match(html, /themeQuery\?\.addListener\?\.\(updateSystemTheme\)/);
-    assert.match(html, /setAttribute\("aria-pressed", selected \? "true" : "false"\)/);
-  }
 });
 
 test("dashboard exposes active worker jobs and their current steps", async () => {
@@ -2488,6 +671,7 @@ test("dashboard exposes active worker jobs and their current steps", async () =>
     display_title: "Review event item openclaw/openclaw#92521",
     status: "in_progress",
     conclusion: null,
+    run_attempt: 1,
     html_url: "https://github.com/openclaw/clawsweeper/actions/runs/42",
     created_at: isoAgo(120_000),
     updated_at: isoAgo(10_000),
@@ -2498,6 +682,7 @@ test("dashboard exposes active worker jobs and their current steps", async () =>
     display_title: "Review event item openclaw/openclaw#92523",
     status: "queued",
     conclusion: null,
+    run_attempt: 1,
     html_url: "https://github.com/openclaw/clawsweeper/actions/runs/43",
     created_at: isoAgo(30_000),
     updated_at: isoAgo(5_000),
@@ -2508,6 +693,7 @@ test("dashboard exposes active worker jobs and their current steps", async () =>
     display_title: "Publish exact review batch",
     status: "queued",
     conclusion: null,
+    run_attempt: 1,
     html_url: "https://github.com/openclaw/clawsweeper/actions/runs/44",
     created_at: isoAgo(20_000),
     updated_at: isoAgo(2_000),
@@ -2542,7 +728,7 @@ test("dashboard exposes active worker jobs and their current steps", async () =>
               : [],
       });
     }
-    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/42/jobs") {
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/42/attempts/1/jobs") {
       return jsonResponse({
         total_count: 3,
         jobs: [
@@ -2624,10 +810,10 @@ test("dashboard exposes active worker jobs and their current steps", async () =>
         ],
       });
     }
-    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/43/jobs") {
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/43/attempts/1/jobs") {
       return jsonResponse({ total_count: 0, jobs: [] });
     }
-    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/44/jobs") {
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/44/attempts/1/jobs") {
       return jsonResponse({
         total_count: 1,
         jobs: [
@@ -2901,6 +1087,7 @@ test("dashboard keeps control-plane workflow fallbacks out of Codex capacity", a
     display_title: displayTitle,
     status,
     conclusion: null,
+    run_attempt: 1,
     html_url: `https://github.com/openclaw/clawsweeper/actions/runs/${id}`,
     created_at: isoAgo(Number(id) * 1_000),
     updated_at: isoAgo(500),
@@ -2913,7 +1100,9 @@ test("dashboard keeps control-plane workflow fallbacks out of Codex capacity", a
         workflow_runs: !status ? runs : runs.filter((run) => run.status === status),
       });
     }
-    if (/^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/jobs$/.test(url.pathname)) {
+    if (
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(url.pathname)
+    ) {
       return jsonResponse({ jobs: [] });
     }
     if (
@@ -2977,6 +1166,7 @@ test("dashboard bounds worker job detail request concurrency", async () => {
     display_title: `Review event item openclaw/openclaw#${9000 + index}`,
     status: "in_progress",
     conclusion: null,
+    run_attempt: 1,
     html_url: `https://github.com/openclaw/clawsweeper/actions/runs/${1000 + index}`,
     created_at: isoAgo((index + 1) * 1000),
     updated_at: isoAgo(1000),
@@ -2990,8 +1180,10 @@ test("dashboard bounds worker job detail request concurrency", async () => {
       const status = url.searchParams.get("status");
       return jsonResponse({ workflow_runs: !status || status === "in_progress" ? runs : [] });
     }
-    if (/^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/jobs$/.test(url.pathname)) {
-      const runId = Number(url.pathname.split("/").at(-2));
+    if (
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(url.pathname)
+    ) {
+      const runId = Number(url.pathname.split("/").at(-4));
       activeJobRequests += 1;
       maxActiveJobRequests = Math.max(maxActiveJobRequests, activeJobRequests);
       await new Promise((resolve) => setTimeout(resolve, 5));
@@ -3095,6 +1287,7 @@ test("dashboard paginates worker jobs beyond GitHub's first page", async () => {
     display_title: "Review event item openclaw/openclaw#500",
     status: "in_progress",
     conclusion: null,
+    run_attempt: 1,
     html_url: "https://github.com/openclaw/clawsweeper/actions/runs/500",
     created_at: isoAgo(60_000),
     updated_at: isoAgo(5_000),
@@ -3108,7 +1301,7 @@ test("dashboard paginates worker jobs beyond GitHub's first page", async () => {
         workflow_runs: !status || status === "in_progress" ? [run] : [],
       });
     }
-    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/500/jobs") {
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/500/attempts/1/jobs") {
       const page = Number(url.searchParams.get("page") || "1");
       requestedPages.push(page);
       const count = page === 1 ? 100 : 28;
@@ -3202,7 +1395,7 @@ test("dashboard reports worker health without treating worker jobs as lifecycle 
       });
     }
     const jobMatch = url.pathname.match(
-      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/(\d+)\/jobs$/,
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/(\d+)\/attempts\/1\/jobs$/,
     );
     if (jobMatch) {
       jobRequests += 1;
@@ -3302,6 +1495,83 @@ test("dashboard reports worker health without treating worker jobs as lifecycle 
   }
 });
 
+for (const failure of ["http_503", "missing_attempt", "wrong_attempt"] as const)
+  test(`dashboard retains cached worker-health failures: ${failure}`, async () => {
+    const originalFetch = globalThis.fetch;
+    const originalCaches = globalThis.caches;
+    Object.defineProperty(globalThis, "caches", {
+      configurable: true,
+      value: { default: new MemoryCache() },
+    });
+    const run = {
+      ...completedReviewRun(101, 42, "success", 60_000),
+      run_attempt: failure === "missing_attempt" ? undefined : 1,
+    };
+    const expectedError =
+      failure === "http_503" ? "worker_health_unavailable:http_503" : "worker_health_unavailable";
+    let jobRequests = 0;
+    globalThis.fetch = async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs") {
+        return jsonResponse({
+          total_count: url.searchParams.get("status") === "completed" ? 1 : 0,
+          workflow_runs: url.searchParams.get("status") === "completed" ? [run] : [],
+        });
+      }
+      if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs/101/attempts/1/jobs") {
+        jobRequests += 1;
+        return failure === "wrong_attempt"
+          ? jsonResponse({
+              total_count: 1,
+              jobs: [
+                {
+                  id: 1011,
+                  run_id: 101,
+                  run_attempt: 2,
+                  name: "Review shard",
+                  status: "completed",
+                  conclusion: "success",
+                },
+              ],
+            })
+          : new Response("synthetic private upstream detail", { status: 503 });
+      }
+      if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
+      if (url.pathname === "/repos/openclaw/openclaw/issues") return jsonResponse([]);
+      if (url.pathname.includes("/actions/workflows/")) return jsonResponse({ workflow_runs: [] });
+      throw new Error(`unexpected fetch ${url}`);
+    };
+    try {
+      const store = new MemoryKv();
+      const env = { STATUS_STORE: store };
+      const background: Promise<unknown>[] = [];
+      const ctx = { waitUntil: (promise: Promise<unknown>) => background.push(promise) };
+      const request = new Request("https://clawsweeper.openclaw.ai/api/status");
+      const first = await (await worker.fetch(request, env, ctx)).json();
+      await Promise.allSettled(background);
+      assert.deepEqual(first.diagnostics.errors, [expectedError]);
+      assert.equal(first.diagnostics.error_count, 1);
+      assert.equal(JSON.stringify(first).includes("synthetic private upstream detail"), false);
+
+      // Expire the composed snapshot while leaving its younger health aggregate cached.
+      await store.put(
+        "snapshot:bay-scope:v2:_",
+        JSON.stringify({ ...first, generated_at: new Date(Date.now() - 901_000).toISOString() }),
+      );
+      const second = await (await worker.fetch(request, env, ctx)).json();
+      await Promise.allSettled(background);
+      assert.deepEqual(second.diagnostics, first.diagnostics);
+      assert.equal(
+        jobRequests,
+        failure === "missing_attempt" ? 0 : 1,
+        "the failure must survive reuse without a new GitHub request",
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+    }
+  });
+
 test("dashboard cold-cache status bounds a stalled forty-run worker-health refresh", async () => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
@@ -3325,7 +1595,9 @@ test("dashboard cold-cache status bounds a stalled forty-run worker-health refre
               : runs,
       });
     }
-    if (/^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/jobs$/.test(url.pathname)) {
+    if (
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(url.pathname)
+    ) {
       stalledJobRequests += 1;
       return new Promise<Response>(() => undefined);
     }
@@ -3558,6 +1830,7 @@ test("dashboard reads stored CI status for active PR rows", async () => {
             display_title: "Review event item openclaw/openclaw#80609",
             status: "in_progress",
             conclusion: null,
+            run_attempt: 1,
             html_url: "https://github.com/openclaw/clawsweeper/actions/runs/1",
             created_at: new Date(Date.now() - 60_000).toISOString(),
             updated_at: new Date().toISOString(),
@@ -3758,11 +2031,18 @@ test("dashboard stale refresh coalesces concurrent polling requests", async () =
   const fetchGate = new Promise<void>((resolve) => {
     releaseFetch = resolve;
   });
+  let completedRunRequests = 0;
   let unfilteredRunRequests = 0;
   globalThis.fetch = async (input) => {
     const url = new URL(String(input));
     await fetchGate;
     if (url.pathname.includes("/actions/")) {
+      if (
+        url.pathname.endsWith("/actions/runs") &&
+        url.searchParams.get("status") === "completed"
+      ) {
+        completedRunRequests += 1;
+      }
       if (url.pathname.endsWith("/actions/runs") && !url.searchParams.has("status")) {
         unfilteredRunRequests += 1;
       }
@@ -3813,7 +2093,8 @@ test("dashboard stale refresh coalesces concurrent polling requests", async () =
     caller.abort();
     releaseFetch();
     await Promise.all(waitUntilPromises);
-    assert.equal(unfilteredRunRequests, refreshes);
+    assert.equal(completedRunRequests, refreshes);
+    assert.equal(unfilteredRunRequests, 0, "status never lists the whole run history");
     assert.equal(queueReads, 2 * refreshes);
 
     const refreshed = await worker.fetch(request, env);
@@ -4070,6 +2351,7 @@ test("dashboard keeps workflow CI status when live PR checks fail", async () => 
             display_title: "Review event item openclaw/openclaw#80609",
             status: "in_progress",
             conclusion: null,
+            run_attempt: 1,
             html_url: "https://github.com/openclaw/clawsweeper/actions/runs/1",
             created_at: new Date(Date.now() - 60_000).toISOString(),
             updated_at: new Date().toISOString(),
@@ -4122,6 +2404,7 @@ test("dashboard reuses live PR CI hydration within one status snapshot", async (
       display_title: "Review event item openclaw/openclaw#80609",
       status: "in_progress",
       conclusion: null,
+      run_attempt: 1,
       html_url: "https://github.com/openclaw/clawsweeper/actions/runs/8060901",
       created_at: isoAgo(120_000),
       updated_at: isoAgo(10_000),
@@ -4132,6 +2415,7 @@ test("dashboard reuses live PR CI hydration within one status snapshot", async (
       display_title: "Review event item openclaw/openclaw#80609",
       status: "in_progress",
       conclusion: null,
+      run_attempt: 1,
       html_url: "https://github.com/openclaw/clawsweeper/actions/runs/8060902",
       created_at: isoAgo(90_000),
       updated_at: isoAgo(5_000),
@@ -4145,7 +2429,9 @@ test("dashboard reuses live PR CI hydration within one status snapshot", async (
       const status = url.searchParams.get("status");
       return jsonResponse({ workflow_runs: !status || status === "in_progress" ? runs : [] });
     }
-    if (/^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/jobs$/.test(url.pathname)) {
+    if (
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(url.pathname)
+    ) {
       return jsonResponse({ jobs: [] });
     }
     if (url.pathname === "/repos/openclaw/openclaw/pulls/80609") {
@@ -4217,6 +2503,228 @@ test("dashboard reuses live PR CI hydration within one status snapshot", async (
   }
 });
 
+test("dashboard CI status counts check runs beyond the first page", async () => {
+  // openclaw PR heads often carry 100-300 check runs; a failure on a later page
+  // used to be invisible, so the dashboard showed green with total 100.
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    value: {
+      default: new MemoryCache(),
+    },
+  });
+  const runs = [
+    {
+      id: 8060901,
+      name: "ClawSweeper",
+      display_title: "Review event item openclaw/openclaw#80609",
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 1,
+      html_url: "https://github.com/openclaw/clawsweeper/actions/runs/8060901",
+      created_at: isoAgo(120_000),
+      updated_at: isoAgo(10_000),
+    },
+    {
+      id: 8060902,
+      name: "ClawSweeper",
+      display_title: "Review event item openclaw/openclaw#80609",
+      status: "in_progress",
+      conclusion: null,
+      run_attempt: 1,
+      html_url: "https://github.com/openclaw/clawsweeper/actions/runs/8060902",
+      created_at: isoAgo(90_000),
+      updated_at: isoAgo(5_000),
+    },
+  ];
+  let pullRequests = 0;
+  let checkRequests = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs") {
+      const status = url.searchParams.get("status");
+      return jsonResponse({ workflow_runs: !status || status === "in_progress" ? runs : [] });
+    }
+    if (
+      /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/\d+\/attempts\/1\/jobs$/.test(url.pathname)
+    ) {
+      return jsonResponse({ jobs: [] });
+    }
+    if (url.pathname === "/repos/openclaw/openclaw/pulls/80609") {
+      pullRequests += 1;
+      return jsonResponse({ head: { sha: "head-80609" } });
+    }
+    if (url.pathname === "/repos/openclaw/openclaw/commits/head-80609/check-runs") {
+      checkRequests += 1;
+      const page = Number(url.searchParams.get("page") ?? "1");
+      const all = Array.from({ length: 231 }, (_, index) => ({
+        name: `check-${index}`,
+        status: "completed",
+        conclusion: index === 230 ? "failure" : "success",
+      }));
+      return jsonResponse({
+        total_count: 231,
+        check_runs: all.slice((page - 1) * 100, page * 100),
+      });
+    }
+    if (
+      url.pathname ===
+      "/repos/openclaw/clawsweeper/actions/workflows/repair-cluster-intake.yml/runs"
+    ) {
+      return jsonResponse({ workflow_runs: [] });
+    }
+    if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
+    if (url.pathname === "/repos/openclaw/openclaw/issues") return jsonResponse([]);
+    throw new Error(`unexpected fetch ${url}`);
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request("https://clawsweeper.openclaw.ai/api/status"),
+      {
+        CLAWSWEEPER_REPO: "openclaw/clawsweeper",
+        TARGET_REPOS: "openclaw/openclaw",
+        CACHE_TTL_SECONDS: "0",
+        INCLUDE_CI_STATUS: "1",
+      },
+      {
+        waitUntil: () => undefined,
+      },
+    );
+    const status = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(pullRequests, 1);
+    assert.equal(checkRequests, 3);
+    assert.deepEqual(status.pipeline[0].ci, {
+      state: "red",
+      total: 231,
+      failing: 1,
+      pending: 0,
+      source: "live",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+  }
+});
+
+test("dashboard reconciles workflow observations before deriving lifecycle views", async (t) => {
+  const row = {
+    ...completedReviewRun(42, 101, "failure", 60_000),
+    run_attempt: 1,
+    updated_at: isoAgo(20_000),
+  };
+  const running = { ...row, status: "in_progress", conclusion: null };
+  const queued = { ...running, status: "queued", updated_at: isoAgo(30_000) };
+  const completed = { ...row, updated_at: isoAgo(10_000) };
+  const cases = [
+    { name: "stale queued feed", active: [running, queued], done: [], winner: running },
+    { name: "completed", active: [running], done: [completed], winner: completed },
+    {
+      name: "rerun generation precedes timestamp",
+      active: [{ ...running, run_attempt: 2 }],
+      done: [completed],
+      winner: running,
+    },
+    {
+      name: "equal-second completion",
+      active: [running],
+      done: [{ ...completed, updated_at: running.updated_at }],
+      winner: completed,
+    },
+    {
+      name: "exact tie retains first feed",
+      active: [running, { ...queued, updated_at: running.updated_at }],
+      done: [],
+      winner: running,
+    },
+    {
+      name: "known generation precedes missing metadata",
+      active: [running, { ...queued, run_attempt: undefined, updated_at: undefined }],
+      done: [],
+      winner: running,
+    },
+    {
+      name: "overlapping active filters",
+      active: [running, { ...queued, updated_at: isoAgo(5_000) }],
+      done: [],
+      winner: queued,
+    },
+  ];
+  for (const scenario of cases) {
+    await t.test(scenario.name, async (t) => {
+      const originalFetch = globalThis.fetch;
+      const originalCaches = globalThis.caches;
+      t.after(() => {
+        globalThis.fetch = originalFetch;
+        Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+      });
+      Object.defineProperty(globalThis, "caches", {
+        configurable: true,
+        value: { default: new MemoryCache() },
+      });
+      globalThis.fetch = async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs") {
+          const status = url.searchParams.get("status");
+          assert.ok(status, "workflow reads must remain status-filtered");
+          const rows =
+            status === "completed"
+              ? scenario.done
+              : scenario.active.filter((run) => run.status === status);
+          return jsonResponse({ total_count: rows.length, workflow_runs: rows });
+        }
+        if (
+          /^\/repos\/openclaw\/clawsweeper\/actions\/runs\/42\/attempts\/[12]\/jobs$/.test(
+            url.pathname,
+          )
+        ) {
+          return jsonResponse({
+            total_count: 1,
+            jobs: [
+              {
+                id: 420,
+                run_id: 42,
+                name: "Review shard",
+                status: scenario.winner.status,
+                conclusion: scenario.winner.conclusion,
+                started_at: row.created_at,
+                completed_at: scenario.winner.status === "completed" ? row.updated_at : null,
+                steps: [],
+              },
+            ],
+          });
+        }
+        if (url.pathname.includes("/actions/workflows/"))
+          return jsonResponse({ total_count: 0, workflow_runs: [] });
+        if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
+        if (url.pathname === "/repos/openclaw/openclaw/issues") return jsonResponse([]);
+        throw new Error(`unexpected fetch ${url}`);
+      };
+      const response = await worker.fetch(
+        new Request("https://clawsweeper.openclaw.ai/api/status"),
+        { STATUS_STORE: new MemoryKv(), CACHE_TTL_SECONDS: "-1" },
+      );
+      const status = await response.json();
+      const terminal = scenario.winner.status === "completed";
+      const waiting = scenario.winner.status === "queued";
+      assert.equal(response.status, 200);
+      assert.deepEqual(status.diagnostics.errors, []);
+      assert.equal(status.fleet.active_workflow_runs, terminal ? 0 : 1);
+      assert.equal(status.fleet.queued_workflow_runs, waiting ? 1 : 0);
+      assert.equal(status.fleet.failed_recent_runs, terminal ? 1 : 0);
+      assert.equal(status.operational_health.oldest_running_minutes > 0, !terminal && !waiting);
+      assert.equal(status.operational_health.queued_runs, waiting ? 1 : 0);
+      assert.equal(status.health.sampled_runs, terminal ? 1 : 0);
+      assert.deepEqual(
+        status.pipeline.map((run) => run.status),
+        terminal ? [] : [scenario.winner.status],
+      );
+    });
+  }
+});
+
 test("dashboard counts active runs that are older than the latest unfiltered page", async () => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
@@ -4242,6 +2750,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "recent completed run",
               status: "completed",
               conclusion: "success",
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/1",
               created_at: "2026-05-14T06:40:00Z",
               updated_at: "2026-05-14T06:41:00Z",
@@ -4258,6 +2767,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "Review event item openclaw/openclaw#81001",
               status: "in_progress",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/2",
               created_at: isoAgo(25 * 60_000),
               updated_at: isoAgo(20 * 60_000),
@@ -4268,6 +2778,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "Commit review openclaw/openclaw@abc123",
               status: "in_progress",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/3",
               created_at: isoAgo(20 * 60_000),
               updated_at: isoAgo(15 * 60_000),
@@ -4278,6 +2789,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "github_activity",
               status: "in_progress",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/5",
               created_at: isoAgo(18 * 60_000),
               updated_at: isoAgo(16 * 60_000),
@@ -4288,6 +2800,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "ClawSweeper Live Dashboard CI Status",
               status: "in_progress",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/6",
               created_at: isoAgo(17 * 60_000),
               updated_at: isoAgo(15 * 60_000),
@@ -4304,6 +2817,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "Review event item openclaw/openclaw#81002",
               status: "queued",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/4",
               created_at: isoAgo(30 * 60_000),
               updated_at: isoAgo(29 * 60_000),
@@ -4314,6 +2828,7 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
               display_title: "github_activity",
               status: "queued",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/7",
               created_at: isoAgo(31 * 60_000),
               updated_at: isoAgo(30 * 60_000),
@@ -4353,6 +2868,131 @@ test("dashboard counts active runs that are older than the latest unfiltered pag
   }
 });
 
+test("dashboard bounds active-run pagination without hiding incomplete telemetry", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    value: { default: { match: async () => undefined, put: async () => undefined } },
+  });
+  try {
+    for (const scenario of [
+      { total: 100, pages: [1], observed: 100, complete: true },
+      { total: 167, pages: [1, 2], observed: 167, complete: true },
+      { total: 300, pages: [1, 2, 3], observed: 300, complete: true },
+      { total: 301, pages: [1, 2, 3], observed: 300, complete: false },
+      { total: 167, pages: [1, 2], observed: 100, complete: false, failPage: 2 },
+      { total: 167, pages: [1, 2, 1, 2], observed: 100, complete: false, drift: true },
+      { total: 167, pages: [1, 2, 1, 2], observed: 100, complete: false, short: true },
+      { total: 167, pages: [1, 2, 1, 2], observed: 167, complete: false, duplicate: true },
+    ]) {
+      const requestedPages: number[] = [];
+      globalThis.fetch = async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs") {
+          if (url.searchParams.get("status") !== "queued")
+            return jsonResponse({ workflow_runs: [] });
+          const page = Number(url.searchParams.get("page") || 1);
+          requestedPages.push(page);
+          if (page === scenario.failPage) return new Response("unavailable", { status: 503 });
+          const count =
+            scenario.short && page === 2 ? 0 : Math.min(100, scenario.total - (page - 1) * 100);
+          return jsonResponse({
+            total_count: scenario.drift && page === 2 ? scenario.total + 1 : scenario.total,
+            workflow_runs: Array.from({ length: count }, (_, index) => ({
+              id: (scenario.duplicate ? 0 : (page - 1) * 100) + index + 1,
+              name: "ClawSweeper Commit Review",
+              status: "queued",
+              created_at: isoAgo(7 * 24 * 60 * 60_000),
+              updated_at: isoAgo(7 * 24 * 60 * 60_000),
+            })),
+          });
+        }
+        if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
+        throw new Error(`unexpected fetch ${url}`);
+      };
+      const response = await worker.fetch(
+        new Request("https://clawsweeper.openclaw.ai/api/status"),
+        {
+          CLAWSWEEPER_REPO: "openclaw/clawsweeper",
+          TARGET_REPOS: "openclaw/openclaw",
+          CACHE_TTL_SECONDS: "0",
+        },
+        { waitUntil: () => undefined },
+      );
+      const status = await response.json();
+      assert.equal(response.status, 200);
+      assert.equal(
+        status.operational_health.telemetry_complete,
+        scenario.complete,
+        JSON.stringify(scenario),
+      );
+      assert.equal(status.operational_health.status, scenario.complete ? "healthy" : "unknown");
+      assert.equal(
+        status.operational_health.zombie_queued_runs,
+        scenario.duplicate ? 100 : scenario.observed,
+      );
+      assert.deepEqual(requestedPages, scenario.pages);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+  }
+});
+
+test("dashboard rebuilds inconsistent active censuses without replaying memoized pages", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalCaches = globalThis.caches;
+  Object.defineProperty(globalThis, "caches", {
+    configurable: true,
+    value: { default: { match: async () => undefined, put: async () => undefined } },
+  });
+  try {
+    for (const singlePage of [true, false]) {
+      const requests = new Map<string, number[]>();
+      let attempt = 0;
+      globalThis.fetch = async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname === "/repos/openclaw/clawsweeper/actions/runs") {
+          const status = url.searchParams.get("status") || "recent";
+          const page = Number(url.searchParams.get("page") || 1);
+          requests.set(status, [...(requests.get(status) || []), page]);
+          if (status !== "queued") return jsonResponse({ total_count: 0, workflow_runs: [] });
+          if (page === 1) attempt += 1;
+          const total = singlePage ? 13 : attempt === 1 && page === 1 ? 166 : 167;
+          const count = singlePage ? (attempt === 1 ? 12 : 13) : page === 1 ? 100 : 67;
+          return jsonResponse({
+            total_count: total,
+            workflow_runs: Array.from({ length: count }, (_, index) => ({
+              id: attempt * 1_000 + (page - 1) * 100 + index,
+              name: "ClawSweeper Commit Review",
+              status: "queued",
+              created_at: isoAgo(7 * 24 * 60 * 60_000),
+              updated_at: isoAgo(7 * 24 * 60 * 60_000),
+            })),
+          });
+        }
+        if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
+        throw new Error(`unexpected fetch ${url}`);
+      };
+      const response = await worker.fetch(
+        new Request("https://clawsweeper.openclaw.ai/api/status"),
+        { CLAWSWEEPER_REPO: "openclaw/clawsweeper", CACHE_TTL_SECONDS: "0" },
+        { waitUntil: () => undefined },
+      );
+      const status = await response.json();
+      assert.equal(status.operational_health.telemetry_complete, true);
+      assert.equal(status.operational_health.zombie_queued_runs, singlePage ? 13 : 167);
+      assert.equal(status.diagnostics.error_count, 0);
+      assert.deepEqual(requests.get("queued"), singlePage ? [1, 1] : [1, 2, 1, 2]);
+      assert.deepEqual(requests.get("in_progress"), [1], "consistent statuses are not rebuilt");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
+  }
+});
+
 test("dashboard surfaces stale queue ghosts as zombies without active cards", async () => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
@@ -4379,6 +3019,7 @@ test("dashboard surfaces stale queue ghosts as zombies without active cards", as
               display_title: "clawsweeper_commit_review",
               status: "queued",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/1",
               created_at: isoAgo(7 * 24 * 60 * 60_000),
               updated_at: isoAgo(7 * 24 * 60 * 60_000),
@@ -4389,6 +3030,7 @@ test("dashboard surfaces stale queue ghosts as zombies without active cards", as
               display_title: "Review event item openclaw/openclaw#81002",
               status: "queued",
               conclusion: null,
+              run_attempt: 1,
               html_url: "https://github.com/openclaw/clawsweeper/actions/runs/2",
               created_at: isoAgo(10 * 60_000),
               updated_at: isoAgo(9 * 60_000),
@@ -5294,57 +3936,6 @@ test("triage writes and reprojects aggregate-only fresh cache bodies", async () 
   }
 });
 
-test("PR proof triage keeps legacy Telegram labels visible during migration", async () => {
-  const originalFetch = globalThis.fetch;
-  const originalCaches = globalThis.caches;
-  const queries: string[] = [];
-  Object.defineProperty(globalThis, "caches", {
-    configurable: true,
-    value: { default: new MemoryCache() },
-  });
-  globalThis.fetch = async (input) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith("/labels")) {
-      return jsonResponse([
-        { name: "mantis: telegram-visible-proof", color: "57606A" },
-        { name: "proof: telegram-e2e", color: "57606A" },
-      ]);
-    }
-    if (url.pathname === "/search/issues") {
-      const query = url.searchParams.get("q") ?? "";
-      queries.push(query);
-      return jsonResponse({
-        total_count:
-          query.includes("mantis: telegram-visible-proof") && query.includes("proof: telegram-e2e")
-            ? 1
-            : 0,
-        items: [],
-      });
-    }
-    throw new Error(`unexpected synthetic request: ${url.pathname}`);
-  };
-
-  try {
-    const response = await worker.fetch(
-      new Request("https://clawsweeper.openclaw.ai/api/pr-proof-triage"),
-      { TARGET_REPOS: "synthetic/target", TRIAGE_CACHE_TTL_SECONDS: "0" },
-      { waitUntil: () => undefined },
-    );
-    const snapshot = await response.json();
-    assert.equal(response.status, 200);
-    assert.equal(snapshot.counts["telegram-proof"], 1);
-    assert.ok(
-      queries.some(
-        (query) =>
-          query.includes("mantis: telegram-visible-proof") && query.includes("proof: telegram-e2e"),
-      ),
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-    Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
-  }
-});
-
 test("triage routes reproject raw legacy fresh caches", async () => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
@@ -5574,6 +4165,7 @@ test("cold status deadline releases its owner and stops additional job waves and
   const background: Promise<unknown>[] = [];
   const runs = Array.from({ length: 13 }, (_, index) => ({
     id: 8000 + index,
+    run_attempt: 1,
     name: "Review ClawSweeper items",
     display_title: `Review event item openclaw/openclaw#${9000 + index}`,
     status: "in_progress",
@@ -5656,42 +4248,36 @@ test("cold status deadline releases its owner and stops additional job waves and
   }
 });
 
-test("stalled final publication cannot suppress a later healthy snapshot", async (context) => {
+test("delayed durable publication cannot replace a newer snapshot or restore old edge bodies", async (context) => {
   const originalFetch = globalThis.fetch;
   const originalCaches = globalThis.caches;
   const gate = statusGate<void>();
-  let count = 17;
-  let storeWrites = 0;
-  let cacheWrites = 0;
-  let published: any = null;
-  let serveCache = false;
-  const memoryCache = new MemoryCache();
   const pending: Promise<unknown>[] = [];
-  const store = {
-    async get(key: string) {
-      assert.equal(this, store, "cloned status env must retain the binding object");
-      if (!key.startsWith("snapshot:bay-scope:v2:")) return null;
-      return JSON.stringify({
-        ...publicationStatusFixture(),
-        fleet: { active_workflow_runs: 1, active_codex_jobs: count },
-      });
+  const storage = new MemoryDurableStorage();
+  const owner = new StatusStore({ storage });
+  let count = 17;
+  let writes = 0;
+  let collecting = true;
+  let reads = 0;
+  const store = new MemoryDurableNamespace({
+    async fetch(input: Request, init) {
+      const key = decodeURIComponent(new URL(input.url).pathname.slice(1));
+      if (key.startsWith("snapshot:bay-scope:v2:")) {
+        if (input.method === "GET" && collecting) {
+          reads += 1;
+          // Force the response cache miss, then provide a complete collection fixture.
+          if (reads % 2 === 1) return new Response(null, { status: 404 });
+          return jsonResponse({
+            ...publicationStatusFixture(),
+            fleet: { active_workflow_runs: 1, active_codex_jobs: count },
+          });
+        }
+        if (input.method === "PUT" && ++writes === 1) await gate.promise;
+      }
+      return owner.fetch(init ? new Request(input, init) : input);
     },
-    async put(key: string, body: string) {
-      assert.equal(this, store);
-      assert.equal(key, "snapshot:bay-scope:v2:_");
-      storeWrites += 1;
-      if (storeWrites === 1) await gate.promise;
-      published = JSON.parse(body);
-    },
-  };
-  const cache = {
-    match: async (request: Request) => (serveCache ? memoryCache.match(request) : undefined),
-    async put(request: Request, response: Response) {
-      cacheWrites += 1;
-      if (cacheWrites <= 2) await gate.promise;
-      await memoryCache.put(request, response);
-    },
-  };
+  });
+  const cache = new MemoryCache();
   Object.defineProperty(globalThis, "caches", { configurable: true, value: { default: cache } });
   globalThis.fetch = async () => {
     throw new Error("durable reuse must not call GitHub");
@@ -5703,32 +4289,34 @@ test("stalled final publication cannot suppress a later healthy snapshot", async
     const request = new Request("https://clawsweeper.openclaw.ai/api/status");
     const first = await (await worker.fetch(request, env, ctx)).json();
     assert.equal(first.fleet.active_codex_jobs, 17);
-    assert.equal(storeWrites, 1);
-    assert.equal(cacheWrites, 2);
+    assert.equal(writes, 1);
     context.mock.timers.tick(STATUS_REFRESH_TIMEOUT_MS + 60_000);
     count = 18;
     const second = await (await worker.fetch(request, { ...env }, ctx)).json();
     assert.equal(second.fleet.active_codex_jobs, 18);
     await statusTurn();
-    assert.equal(storeWrites, 2, "a pending write must not suppress later publication");
-    assert.equal(cacheWrites, 4);
-    assert.equal(published.fleet.active_codex_jobs, 18);
-    serveCache = true;
-    assert.equal(
-      (await (await worker.fetch(request, env, ctx)).json()).fleet.active_codex_jobs,
-      18,
-    );
+    assert.equal(writes, 2, "a held arrival must not suppress later publication");
+    collecting = false;
     gate.release();
     await Promise.all(pending);
-    assert.equal(
-      published.fleet.active_codex_jobs,
-      17,
-      "accepted final write survives collection close",
-    );
-    const late = await (await worker.fetch(request, env, ctx)).json();
-    assert.equal(late.fleet.active_codex_jobs, 17);
-    assert.equal(late.generated_at, first.generated_at);
-    assert.equal(late.freshness.state, "stale", "late complete writes retain their actual age");
+    const stored = JSON.parse((await storage.get("snapshot:bay-scope:v2:_")).value);
+    assert.equal(stored.fleet.active_codex_jobs, 18);
+    assert.equal(stored.generated_at, second.generated_at);
+    for (const bucket of ["fresh", "stale"]) {
+      await cache.put(
+        new Request(`https://clawsweeper.openclaw.ai/api/status-cache/v8/_/${bucket}`),
+        jsonResponse(first),
+      );
+    }
+    const latest = await (await worker.fetch(request, env, ctx)).json();
+    assert.equal(latest.fleet.active_codex_jobs, 18);
+    assert.equal(latest.generated_at, second.generated_at);
+    assert.equal(latest.freshness.state, "fresh");
+    context.mock.timers.tick(61_000);
+    const stale = await (await worker.fetch(request, env, ctx)).json();
+    assert.equal(stale.fleet.active_codex_jobs, 18);
+    assert.equal(stale.generated_at, second.generated_at);
+    assert.equal(stale.freshness.state, "stale");
   } finally {
     gate.release();
     await Promise.allSettled(pending);
@@ -5736,6 +4324,54 @@ test("stalled final publication cannot suppress a later healthy snapshot", async
     globalThis.fetch = originalFetch;
     Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches });
   }
+});
+
+test("snapshot publication fence handles ties, poisoned incumbents and independent scopes", async () => {
+  const storage = new MemoryDurableStorage();
+  const owner = new StatusStore({ storage });
+  const now = Date.now();
+  const body = (at, count) =>
+    JSON.stringify({
+      ...publicationStatusFixture(),
+      public_projection_complete: true,
+      generated_at: new Date(at).toISOString(),
+      fleet: { active_workflow_runs: 1, active_codex_jobs: count },
+    });
+  const put = (key, value) =>
+    owner.fetch(
+      new Request(`https://clawsweeper-status-store/${encodeURIComponent(key)}`, {
+        method: "PUT",
+        body: JSON.stringify({ value }),
+      }),
+    );
+  const key = "snapshot:bay-scope:v2:_";
+  assert.equal((await put(key, body(now, 18))).headers.get("X-ClawSweeper-Snapshot"), "accepted");
+  assert.equal((await put(key, body(now, 17))).headers.get("X-ClawSweeper-Snapshot"), "retained");
+  assert.equal(
+    (await put(key, body(now - 1000, 16))).headers.get("X-ClawSweeper-Snapshot"),
+    "retained",
+  );
+  assert.equal(JSON.parse((await storage.get(key)).value).fleet.active_codex_jobs, 18);
+  for (const incumbent of [
+    { value: "bad json" },
+    { value: body(now + 120_000, 99) },
+    { value: body(now + 10_000, 99), expires_at: now - 1 },
+    {
+      value: JSON.stringify({
+        schema_version: 2,
+        generated_at: new Date(now + 1000).toISOString(),
+      }),
+    },
+  ]) {
+    await storage.put(key, incumbent);
+    assert.equal((await put(key, body(now, 18))).headers.get("X-ClawSweeper-Snapshot"), "accepted");
+  }
+  assert.equal((await put(key, "bad json")).status, 400);
+  assert.equal((await put("snapshot:bay-scope:v2:another", body(now - 1000, 7))).status, 204);
+  assert.equal(JSON.parse((await storage.get(key)).value).fleet.active_codex_jobs, 18);
+  assert.equal((await put("ci:openclaw/openclaw#1", "first")).status, 204);
+  assert.equal((await put("ci:openclaw/openclaw#1", "second")).status, 204);
+  assert.equal((await storage.get("ci:openclaw/openclaw#1")).value, "second");
 });
 
 test("status timeout does not cancel shared GitHub App token acquisition", async (context) => {
@@ -5757,12 +4393,22 @@ test("status timeout does not cancel shared GitHub App token acquisition", async
   globalThis.fetch = async (input, init) => {
     const url = new URL(String(input));
     if (url.pathname === "/app/installations/456789/access_tokens") {
+      if (JSON.parse(String(init?.body)).permissions.actions !== "read") {
+        return jsonResponse({ token: "synthetic-other-scope" });
+      }
       tokenRequests += 1;
+      if (tokenRequests > 1) {
+        return jsonResponse({
+          token: "synthetic-reader-token",
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+        });
+      }
       tokenSignal = init?.signal;
       tokenStarted.release();
       return tokenGate.promise;
     }
-    if (url.pathname === "/auth-probe") return jsonResponse({ ok: true });
+    if (url.pathname === "/repos/openclaw/clawsweeper/actions/auth-probe")
+      return jsonResponse({ ok: true });
     if (url.pathname.includes("/actions/")) return jsonResponse({ workflow_runs: [] });
     if (url.pathname === "/search/issues") return jsonResponse({ items: [] });
     if (url.pathname.endsWith("/issues")) return jsonResponse([]);
@@ -5782,21 +4428,24 @@ test("status timeout does not cancel shared GitHub App token acquisition", async
       env,
     );
     await tokenStarted.promise;
-    const unscopedReader = githubJsonForTest(env, "/auth-probe");
+    const unscopedReader = githubJsonForTest(env, "/repos/openclaw/clawsweeper/actions/auth-probe");
     context.mock.timers.tick(STATUS_REFRESH_TIMEOUT_MS);
     const status = await (await statusRequest).json();
     assert.equal(status.public_projection_complete, false);
-    assert.equal(tokenRequests, 1);
-    assert.equal(tokenSignal?.aborted, false, "status owns the wait, not shared authentication");
+    assert.equal(tokenSignal?.aborted, false, "status owns the wait, not authentication");
+    // In-flight mints never cross requests: Workers cancels a request's I/O
+    // when it ends, so the other reader acquires its own token instead of
+    // waiting on the stalled status mint.
+    assert.deepEqual(await unscopedReader, { ok: true });
+    assert.equal(tokenRequests, 2);
     tokenGate.release(
       jsonResponse({
         token: "synthetic-status-token",
         expires_at: new Date(Date.now() + 3_600_000).toISOString(),
       }),
     );
-    assert.deepEqual(await unscopedReader, { ok: true });
     await worker.fetch(new Request("https://clawsweeper.openclaw.ai/api/status"), { ...env });
-    assert.equal(tokenRequests, 1, "subsequent status reuses the same value-keyed token");
+    assert.equal(tokenRequests, 2, "subsequent status reuses the settled value-keyed token");
   } finally {
     tokenGate.release(jsonResponse({ token: "synthetic-status-token" }));
     await statusTurn();

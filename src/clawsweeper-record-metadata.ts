@@ -30,8 +30,7 @@ import type {
 } from "./clawsweeper-types.js";
 import { isRetryableCodexTransportError } from "./codex-transient.js";
 import {
-  isAutomationReportAuthor,
-  isMaintainerAuthorAssociation,
+  usesContributorProofPolicy,
   isVerifiedFixedCloseReason,
   lockedConversationApplyReason,
 } from "./clawsweeper-item-policy.js";
@@ -45,6 +44,8 @@ import { isAutoCloseAllowed, repositoryProfileFor } from "./repository-profiles.
 import { isOlderThanDays, parseIsoMs } from "./iso-time.js";
 import { reportReviewDecision } from "./report-review-decision.js";
 import { ReviewRecordFormatError } from "./review-record.js";
+import { effectiveReviewStatus } from "./review-completion.js";
+export { effectiveReviewStatus, hasVerifiedLocalCheckoutAccess } from "./review-completion.js";
 import {
   REVIEW_STRUCTURAL_CACHE_VERSION,
   validReviewStructuralRecord,
@@ -70,8 +71,11 @@ export function isExternalPullRequestReport(markdown: string): boolean {
   if (frontMatterValue(markdown, "type") !== "pull_request") return false;
   const authorAssociation = frontMatterValue(markdown, "author_association");
   if (!authorAssociation) return false;
-  if (isMaintainerAuthorAssociation(authorAssociation)) return false;
-  return !isAutomationReportAuthor(frontMatterValue(markdown, "author"));
+  return usesContributorProofPolicy(
+    frontMatterValue(markdown, "author"),
+    authorAssociation,
+    frontMatterValue(markdown, "review_origin") === "local_range",
+  );
 }
 
 export function reportCloseReason(markdown: string): CloseReason | undefined {
@@ -400,25 +404,6 @@ export function indexedExistingReview(
   );
 }
 
-function inferReviewStatus(markdown: string): string {
-  return markdown.includes("Codex review failed") ? "failed" : "complete";
-}
-
-export function hasVerifiedLocalCheckoutAccess(markdown: string): boolean {
-  return (
-    frontMatterValue(markdown, "local_checkout_access") === "verified" &&
-    frontMatterValue(markdown, "local_checkout_access_source") === "runner_preflight_v1"
-  );
-}
-
-export function effectiveReviewStatus(markdown: string): string {
-  const status = frontMatterValue(markdown, "review_status") ?? inferReviewStatus(markdown);
-  if (status === "complete") {
-    if (!hasVerifiedLocalCheckoutAccess(markdown)) return "stale_local_checkout_unverified";
-  }
-  return status;
-}
-
 export function failedReviewRetryRevisionForReport(
   markdown: string,
 ): FailedReviewRetryRevision | null {
@@ -497,6 +482,11 @@ export function isFailedReviewRetryAlreadyExhausted(
 
 export function failedReviewFailureDetail(markdown: string): string {
   const decision = reportReviewDecision(markdown);
+  // Item titles are contributor text. Drop the title front matter and heading so a
+  // title cannot make a permanent failure look like a retryable provider error.
+  const reportText = markdown
+    .replace(/^(?:title|fixed_pr_title): .*$/gm, "")
+    .replace(/^# .*$/m, "");
   return [
     frontMatterValue(markdown, "review_status") ?? "",
     decision.decision ?? "",
@@ -504,7 +494,7 @@ export function failedReviewFailureDetail(markdown: string): string {
     decision.evidenceMarkdown,
     sectionValue(markdown, "Summary"),
     sectionValue(markdown, "Evidence"),
-    markdown.slice(0, 8000),
+    reportText.slice(0, 8000),
   ].join("\n");
 }
 

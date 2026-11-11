@@ -59,6 +59,36 @@ test("ETag keys fence credential pool, media type, query, and page", () => {
   assert.equal(page2.route, "/repos/openclaw/openclaw/issues/42/comments?page=2&per_page=100");
 });
 
+test("dashboard job ETags isolate workflow attempts and pages", () => {
+  const key = (attempt: number, page = 1) =>
+    githubEtagCacheKey({
+      credentialPool: "repository_actions",
+      route: `/repos/openclaw/clawsweeper/actions/runs/42/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+      surface: "dashboard",
+    });
+  const first = key(1)!;
+  assert.ok(first);
+  assert.notEqual(first.cacheKey, key(2)?.cacheKey);
+  assert.notEqual(first.cacheKey, key(1, 2)?.cacheKey);
+  assert.notEqual(
+    first.cacheKey,
+    githubEtagCacheKey({
+      credentialPool: "repository_actions",
+      route: "/repos/openclaw/clawsweeper/actions/runs/42/jobs?per_page=100&page=1",
+      surface: "dashboard",
+    })?.cacheKey,
+  );
+  assert.equal(key(1, 2)?.page, 2);
+  assert.equal(
+    githubEtagCacheKey({
+      credentialPool: "repository_actions",
+      route: first.route,
+      surface: "apply",
+    }),
+    null,
+  );
+});
+
 test("projected GitHub reads bypass the durable ETag broker", (t) => {
   const keys = ["EXACT_EVENT_PUBLICATION", "EXACT_REVIEW_QUEUE_URL", "CLAWSWEEPER_WEBHOOK_SECRET"];
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
@@ -812,6 +842,69 @@ test("dashboard health reads send If-None-Match and replay only after durable co
     assert.deepEqual(observed, [null, '"health-v1"', '"health-v1"']);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("dashboard source reads survive a stalled advisory ETag cache", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    for (const stalled of ["lookup", "confirm", "store", "body"]) {
+      const requests: Array<string | null> = [];
+      const cacheSignals: AbortSignal[] = [];
+      let cacheStarted: () => void;
+      const started = new Promise<void>((resolve) => {
+        cacheStarted = resolve;
+      });
+      const env = {
+        GITHUB_TOKEN: "dashboard-token",
+        CLAWSWEEPER_WEBHOOK_SECRET: webhookSecret,
+        GITHUB_ETAG_CACHE: new MemoryDurableNamespace({
+          async fetch(request: Request) {
+            const operation = new URL(request.url).pathname.split("/").at(-1);
+            if (operation === stalled || (stalled === "body" && operation === "lookup")) {
+              cacheSignals.push(request.signal);
+              cacheStarted();
+              if (stalled === "body") return new Response(new ReadableStream());
+              return new Promise<Response>((_resolve, reject) => {
+                request.signal.addEventListener("abort", () => reject(request.signal.reason), {
+                  once: true,
+                });
+              });
+            }
+            if (operation === "lookup")
+              return Response.json({
+                hit: stalled === "confirm",
+                entry: { etag: '"cached"', bodyDigest: "0".repeat(64) },
+              });
+            return Response.json({ ok: true });
+          },
+        }),
+      };
+      globalThis.fetch = async (_input, init) => {
+        const etag = new Headers(init?.headers).get("if-none-match");
+        requests.push(etag);
+        return etag
+          ? new Response(null, { status: 304 })
+          : Response.json({ workflow_runs: [{ id: 42 }] }, { headers: { etag: '"new"' } });
+      };
+      const pending = githubJsonForTest(
+        env,
+        "/repos/openclaw/clawsweeper/actions/runs?per_page=100",
+      );
+      await started;
+      t.mock.timers.tick(1_001);
+      const result = await pending;
+      assert.equal(result.workflow_runs[0].id, 42, stalled);
+      assert.ok(
+        cacheSignals.every((signal) => signal.aborted),
+        stalled,
+      );
+      assert.deepEqual(requests, stalled === "confirm" ? ['"cached"', null] : [null]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    t.mock.timers.reset();
   }
 });
 

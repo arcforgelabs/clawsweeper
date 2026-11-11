@@ -1,3 +1,4 @@
+import { PUBLICATION_TELEMETRY_REASONS } from "../dashboard/exact-review-publication-reasons.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -101,6 +102,7 @@ function reviewCoverageFixture() {
     window_days: 7,
     inventory_generated_at: "2026-08-15T11:55:00Z",
     inventory_status: "current",
+    coverage_status: "complete",
     fleets: [
       {
         repo: PRIVATE_MARKERS.repository,
@@ -143,6 +145,18 @@ test("review coverage retains only fleet-wide aggregate counts", () => {
   const malformed = reviewCoverageFixture();
   malformed.totals.reviewed_recent = -1;
   assert.equal(publicReviewCoverageProjection(malformed), null);
+});
+
+test("review coverage preserves explicit unknown status without deriving a percentage", () => {
+  const fixture = {
+    ...reviewCoverageFixture(),
+    coverage_status: "unknown",
+    totals: { ...reviewCoverageFixture().totals, coverage_percent: null },
+  };
+  const result = publicReviewCoverageProjection(fixture);
+  assert.equal(result?.coverage_status, "unknown");
+  assert.equal(result?.totals.coverage_percent, null);
+  assert.equal(publicReviewCoverageProjection({ ...fixture, coverage_status: "complete" }), null);
 });
 
 function applyAggregate(arrivals: number) {
@@ -619,4 +633,31 @@ test("public observability projections are idempotent and reject non-ISO timesta
       assert.equal(projector(malformed), null);
     }
   }
+});
+
+test("publication reason projection reconciles closed counts and preserves legacy totals", () => {
+  const fixture = recentPublicationFixture();
+  const legacy = publicRecentDurablePublicationEventsProjection(fixture);
+  assert.equal(legacy?.batch.reason_counts, null);
+  assert.equal(legacy?.direct.counts.accepted, 1);
+  const reasons = Object.fromEntries(
+    Object.entries(PUBLICATION_TELEMETRY_REASONS).map(([outcome, codes]) => [
+      outcome,
+      Object.fromEntries([...codes, "unrecorded"].map((code) => [code, 0])),
+    ]),
+  );
+  const source = { ...fixture, batch: { ...fixture.batch, reason_counts: reasons } };
+  const projected = publicRecentDurablePublicationEventsProjection(source);
+  assert.deepEqual(projected?.batch.reason_counts, reasons);
+  assert.deepEqual(publicRecentDurablePublicationEventsProjection(projected), projected);
+  const withPrivate = {
+    ...source,
+    batch: { ...source.batch, reason_counts: { ...reasons, private: PRIVATE_MARKERS } },
+  };
+  assertPrivateMarkersAbsent(publicRecentDurablePublicationEventsProjection(withPrivate));
+  reasons.permanent!.invalid_artifact = 1;
+  assert.equal(publicRecentDurablePublicationEventsProjection(source), null);
+  reasons.permanent!.invalid_artifact = 0;
+  delete reasons.permanent!.unrecorded;
+  assert.equal(publicRecentDurablePublicationEventsProjection(source), null);
 });

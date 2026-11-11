@@ -181,6 +181,13 @@ test("Codex failure logs distinguish provider throttling from content output fai
     }),
     "provider_throttle",
   );
+  assert.equal(
+    codexFailureLogKindForTest(
+      1,
+      "Codex review failed for #42: Codex final output did not end with its newline frame.\nERROR: Selected model is at capacity. Please try a different model.",
+    ),
+    "provider_throttle",
+  );
   assert.equal(codexFailureLogKindForTest(1, "Codex wrote invalid JSON"), "content_or_output");
   assert.equal(codexFailureLogKindForTest(null, "Codex review timed out."), "timeout");
   // Captured model output is evidence only. It does not change the log kind.
@@ -739,6 +746,141 @@ process.stdout.write(JSON.stringify({ payloads: [{ text }], meta: { stopReason: 
   }
 });
 
+test("runCodex reports the OpenClaw checkout inspection reason ahead of stderr warnings", () => {
+  const root = mkdtempSync(tmpPrefix);
+  const openclawDir = join(root, "openclaw");
+  const workDir = join(root, "review-work");
+  const openclawPath = join(root, "fake-openclaw");
+  mkdirSync(openclawDir, { recursive: true });
+  initTrackedRepo(openclawDir);
+  const warning =
+    "[plugins] clawsweeper-read-receipt: OpenClaw can't verify where this plugin came from.";
+  writeFileSync(
+    openclawPath,
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+process.stderr.write(${JSON.stringify(warning)} + "\\n");
+const prompt = fs.readFileSync(process.argv[process.argv.indexOf("--message-file") + 1], "utf8");
+const relativePath = JSON.parse(prompt.match(/^Path: (.+)$/m)[1]);
+const challenged = fs.readFileSync(path.join(process.env.OPENCLAW_WORKSPACE_DIR, relativePath), "utf8").trim();
+process.stdout.write(JSON.stringify({ payloads: [{ text: challenged }], meta: { stopReason: "stop" } }));
+`,
+  );
+  chmodSync(openclawPath, 0o755);
+  const previous = {
+    CLAWSWEEPER_RUNNER: process.env.CLAWSWEEPER_RUNNER,
+    CLAWSWEEPER_OPENCLAW_BIN: process.env.CLAWSWEEPER_OPENCLAW_BIN,
+    CLAWSWEEPER_OPENCLAW_MODEL: process.env.CLAWSWEEPER_OPENCLAW_MODEL,
+    CODEX_BIN: process.env.CODEX_BIN,
+  };
+  process.env.CLAWSWEEPER_RUNNER = "openclaw";
+  process.env.CLAWSWEEPER_OPENCLAW_BIN = openclawPath;
+  process.env.CLAWSWEEPER_OPENCLAW_MODEL = "openai/gpt-5";
+  process.env.CODEX_BIN = join(root, "missing-codex");
+  try {
+    assert.throws(
+      () =>
+        runBoundedCodexForTest({
+          item: item({ number: 83396 }),
+          context: { issue: {}, comments: [], timeline: [] },
+          git: { mainSha: "abc123", latestRelease: null },
+          model: "internal",
+          openclawDir,
+          reasoningEffort: "high",
+          sandboxMode: "read-only",
+          serviceTier: "",
+          timeoutMs: 10_000,
+          workDir,
+          prompt: "Return a review decision.",
+        }),
+      (error: Error) => {
+        assert.match(
+          error.message,
+          /^Read-only checkout inspection failed for #83396: OpenClaw checkout inspection did not read the exact challenged path\.\n/,
+        );
+        assert.ok(error.message.includes(warning));
+        return true;
+      },
+    );
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const scenario of [
+  {
+    name: "leads with the Codex challenge mismatch",
+    sandbox: `process.stderr.write("codex progress log\\n"); process.stdout.write("wrong text\\n"); process.exit(0);`,
+    expected:
+      /^Read-only checkout inspection failed for #83395: Codex checkout inspection did not return the runner challenge\.\ncodex progress log/,
+  },
+  {
+    name: "keeps stderr for a failed Codex sandbox",
+    sandbox: `process.stderr.write("sandbox exploded\\n"); process.exit(1);`,
+    expected: /^Read-only checkout inspection failed for #83395: sandbox exploded\n?$/,
+  },
+]) {
+  test(`runCodex checkout inspection failure ${scenario.name}`, () => {
+    const root = mkdtempSync(tmpPrefix);
+    const openclawDir = join(root, "openclaw");
+    const workDir = join(root, "codex-work");
+    const binDir = join(root, "bin");
+    mkdirSync(openclawDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    initTrackedRepo(openclawDir);
+    const codexPath = join(binDir, "codex");
+    writeFileSync(
+      codexPath,
+      `#!/usr/bin/env node
+if (process.argv[2] === "sandbox") {
+  ${scenario.sandbox}
+}
+process.exit(2);
+`,
+    );
+    chmodSync(codexPath, 0o755);
+    const previous = {
+      PATH: process.env.PATH,
+      CLAWSWEEPER_CODEX_REVIEW_ATTEMPTS: process.env.CLAWSWEEPER_CODEX_REVIEW_ATTEMPTS,
+    };
+    process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
+    process.env.CLAWSWEEPER_CODEX_REVIEW_ATTEMPTS = "1";
+    try {
+      assert.throws(
+        () =>
+          runBoundedCodexForTest({
+            item: item({ number: 83395 }),
+            context: { issue: {}, comments: [], timeline: [] },
+            git: { mainSha: "abc123", latestRelease: null },
+            model: "model-test",
+            openclawDir,
+            reasoningEffort: "high",
+            sandboxMode: "read-only",
+            serviceTier: "",
+            timeoutMs: 10_000,
+            workDir,
+            prompt: "Return a review decision.",
+          }),
+        (error: Error) => {
+          assert.match(error.message, scenario.expected);
+          return true;
+        },
+      );
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 test("runCodex reviews after an attested OpenClaw checkout challenge", () => {
   const root = mkdtempSync(tmpPrefix);
   const openclawDir = join(root, "openclaw");
@@ -1075,6 +1217,8 @@ for (const scenario of [
   "valid-first",
   "inactive-decision-repaired",
   "inactive-decision-invalid-twice",
+  "wrong-item-kind-repaired",
+  "wrong-item-kind-invalid-twice",
 ] as const) {
   test(`runCodex decision repair turn: ${scenario}`, () => {
     const root = mkdtempSync(tmpPrefix);
@@ -1096,10 +1240,16 @@ for (const scenario of [
     );
     const inactiveDecision = JSON.parse(validDecision);
     inactiveDecision.maintainerDecision.likelyOwner = { person: "@alice" };
-    const invalidDecision = JSON.stringify(inactiveDecision);
-    const validationError = scenario.startsWith("inactive-decision-")
-      ? "decision.maintainerDecision must be empty when no decision is required"
-      : "decision.evidence must be an array";
+    const invalidDecision = JSON.stringify(
+      scenario.startsWith("wrong-item-kind-")
+        ? closeDecision({ closeReason: "unconfirmed_product_direction" })
+        : inactiveDecision,
+    );
+    const validationError = scenario.startsWith("wrong-item-kind-")
+      ? "decision.closeReason: unconfirmed_product_direction is allowed only for pull requests"
+      : scenario.startsWith("inactive-decision-")
+        ? "decision.maintainerDecision must be empty when no decision is required"
+        : "decision.evidence must be an array";
     mkdirSync(openclawDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     initTrackedRepo(openclawDir);
@@ -1123,9 +1273,9 @@ if (resumed && scenario === "repair-rate-limited") {
   process.exit(1);
 }
 const output = resumed
-  ? scenario === "inactive-decision-invalid-twice" ? ${JSON.stringify(invalidDecision)}
+  ? scenario === "inactive-decision-invalid-twice" || scenario === "wrong-item-kind-invalid-twice" ? ${JSON.stringify(invalidDecision)}
     : scenario === "invalid-twice" ? "not json" : ${JSON.stringify(validDecision)}
-  : scenario.startsWith("inactive-decision-") ? ${JSON.stringify(invalidDecision)}
+  : scenario.startsWith("inactive-decision-") || scenario.startsWith("wrong-item-kind-") ? ${JSON.stringify(invalidDecision)}
     : scenario === "valid-first" ? ${JSON.stringify(validDecision)} : '{"decision":"keep_open"}';
 process.stdout.write(output + "\\n");
 `,
@@ -1624,14 +1774,22 @@ process.exit(1);
   });
 }
 
-for (const [kind, failure] of [
+for (const [label, kind, failure, message] of [
   [
     "capacity",
+    "capacity",
     "stream disconnected: Rate limit reached for secret-model-for-test (for limit test) on tokens per min (TPM). Please try again in 1ms.",
+    /Rate limit reached/,
   ],
-  ["network", "stream disconnected before completion: fetch failed"],
+  [
+    "model capacity",
+    "capacity",
+    "Selected model is at capacity. Please try a different model.",
+    /at capacity/,
+  ],
+  ["network", "network", "stream disconnected before completion: fetch failed", /fetch failed/],
 ] as const)
-  test(`runCodex leaves exhausted ${kind} failures with native trailers to the durable queue`, () => {
+  test(`runCodex leaves exhausted ${label} failures with native trailers to the durable queue`, () => {
     const root = mkdtempSync(tmpPrefix);
     const openclawDir = join(root, "openclaw");
     const workDir = join(root, "codex-work");
@@ -1703,7 +1861,7 @@ ${fakeManagedDecision}
           }),
         (error: Error & { retryable?: boolean }) => {
           assert.equal(error.retryable, true);
-          assert.match(error.message, kind === "capacity" ? /Rate limit reached/ : /fetch failed/);
+          assert.match(error.message, message);
           assert.doesNotMatch(error.message, /contributor-quoted-model/);
           const decision = reportedReviewFailure(error);
           assert.match(decision.summary, new RegExp(`transport failure \\(${kind}\\)`));
