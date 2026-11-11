@@ -46,12 +46,7 @@ test("cache actions use one runtime generation everywhere", () => {
   const references = referenceRoots.flatMap(referenceFiles).flatMap((path) =>
     readFileSync(path, "utf8")
       .split("\n")
-      .flatMap(
-        (line) =>
-          line
-            .replace(/@[0-9a-f]{40} # (v\d+)/g, "@$1")
-            .match(/actions\/cache(?:\/(?:restore|save))?@v\d+/g) ?? [],
-      ),
+      .flatMap((line) => line.match(/actions\/cache(?:\/(?:restore|save))?@v\d+/g) ?? []),
   );
 
   assert.deepEqual(
