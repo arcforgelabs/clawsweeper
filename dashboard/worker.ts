@@ -1,7 +1,10 @@
+import { CENSUS, CENSUS_PATHS, censusSignatureInput } from "../src/review-coverage-census.ts";
+import { publicWarningEvidence } from "./exact-review-warning-evidence.ts";
 import { publicTimestamp } from "./public-timestamp.ts";
 import { writeReviewUsage } from "./review-usage.ts";
 import { isReviewUsageRecord } from "../src/review-usage-contract.ts";
 import { requiresMaintainerReviewRequest } from "../src/maintainer-review-policy.ts";
+import { requiresVerifiedMaintainerReviewRequest } from "./maintainer-author.ts";
 import {
   publicBayActivityKind,
   normalizePublicBayActivityKind,
@@ -25,13 +28,11 @@ import {
   reReviewContextFromClawSweeperComment,
 } from "../src/repair/comment-command-text.ts";
 import {
-  authenticateReviewProofProducerToken,
-  reviewProofProducerMatches,
-} from "./review-proof-producer-auth.ts";
-import {
   authenticateTargetDispatchToken,
   TARGET_DISPATCH_MAX_BODY_BYTES,
   targetDispatchQueueIntake,
+  targetDispatchCommentIntake,
+  type TargetDispatchIdentity,
 } from "./target-dispatch-ingress.ts";
 import { legacyCommandCommentId } from "../src/repair/command-ack-convergence.ts";
 import { commandAckMarker } from "../src/repair/markers.ts";
@@ -49,19 +50,23 @@ import {
   githubEtagCacheRequestBody,
 } from "../src/github-etag-cache-contract.ts";
 import {
-  dashboardHtml,
   issueTriagePageConfig,
   prProofTriagePageConfig,
   triageHtml,
   type DashboardEnv,
 } from "./dashboard-pages.ts";
+import { dashboardSiteResponse, isDashboardSitePath } from "./dashboard-site.ts";
 import { summarizeDashboardHealth } from "./dashboard-health.ts";
 import {
   createGithubAppTokenFor,
+  githubAppTokenRequest,
   githubApiUrl,
   githubAppCredentials,
+  GitHubRequestError,
+  githubResponseRateLimited,
+  githubAppInstallationId as typedGithubAppInstallationId,
+  githubAppJson,
   githubAppInstallationIdAsPlainError as githubAppInstallationId,
-  githubAppJsonAsPlainError as githubAppJson,
   signGithubAppJwt,
 } from "./github-api.ts";
 import {
@@ -118,6 +123,7 @@ import {
   publicGithubEgressObservabilityProjection,
   publicRecentDurablePublicationEventsProjection,
   publicReviewCoverageProjection,
+  privateReviewCoverageProjection,
   publicReviewObservabilityProjection,
 } from "./public-observability.ts";
 import {
@@ -153,7 +159,10 @@ export {
 const ACTIVE_RUN_STATUSES = new Set(["queued", "in_progress", "waiting", "requested", "pending"]);
 const QUEUED_RUN_STATUSES = new Set(["queued", "waiting", "requested", "pending"]);
 type DashboardContext = { waitUntil?: (promise: Promise<unknown>) => void };
-type GithubJsonReader = (path: string) => ReturnType<typeof githubJson>;
+type GithubJsonReader = (
+  path: string,
+  options?: { fresh: boolean },
+) => ReturnType<typeof githubJson>;
 type StoredValue = {
   value: string;
   expires_at?: number;
@@ -366,6 +375,8 @@ declare global {
   }
 }
 const ACTIVE_RUN_STATUS_FILTERS = ["in_progress", "queued", "waiting", "requested", "pending"];
+const ACTIVE_RUN_PAGE_LIMIT = 3;
+const GITHUB_ETAG_CACHE_TIMEOUT_MS = 1_000;
 const TERMINAL_BAD_CONCLUSIONS = new Set(["failure", "timed_out", "action_required"]);
 const EVENT_LIMIT = 200;
 const EVENT_STORE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -453,6 +464,61 @@ class FastAckLookupLimitError extends Error {
 const inFlightFastAcks = new Map();
 const CLAWSWEEPER_WEBHOOK_DENY_REPOS = new Set(["openclaw/clawsweeper-state", "openclaw/.github"]);
 const OPTIONAL_SECTION_TIMEOUT_MS = 6000;
+// Record the failing owner before projection; upstream messages can contain
+// private routes and must never enter the public status cache.
+const PUBLIC_STATUS_TELEMETRY_ERRORS = new Set([
+  "completed_workflow_runs_unavailable",
+  "active_runs_unavailable",
+  "active_jobs_unavailable",
+  "worker_health_unavailable",
+  "pipeline_unavailable",
+  "apply_health_unavailable",
+  "recent_closed_unavailable",
+  "events_unavailable",
+]);
+const PUBLIC_STATUS_TELEMETRY_CAUSES = new Set([
+  "timeout",
+  "network",
+  "rate_limited",
+  "invalid_json",
+]);
+
+function publicStatusTelemetryError(value: unknown): string {
+  if (typeof value !== "string" || value.length > 96) return "telemetry_unavailable";
+  const [section, cause, extra] = value.split(":");
+  return PUBLIC_STATUS_TELEMETRY_ERRORS.has(section) &&
+    extra === undefined &&
+    (cause === undefined ||
+      PUBLIC_STATUS_TELEMETRY_CAUSES.has(cause) ||
+      /^http_[45]\d{2}$/.test(cause) ||
+      (section === "active_runs_unavailable" && cause === "census_incomplete"))
+    ? value
+    : "telemetry_unavailable";
+}
+
+function statusTelemetryError(section: string, error: unknown): string {
+  // Cached errors are already closed codes. Never recover a cause from an
+  // upstream message: paths, credentials and response text must stay private.
+  if (typeof error === "string" && error.split(":", 1)[0] === section) {
+    if (publicStatusTelemetryError(error) === error) return error;
+  }
+  const cause =
+    error instanceof GitHubRequestError
+      ? error.timedOut
+        ? "timeout"
+        : error.rateLimited
+          ? "rate_limited"
+          : error.status !== undefined
+            ? `http_${error.status}`
+            : "network"
+      : error instanceof DOMException && error.name === "TimeoutError"
+        ? "timeout"
+        : error instanceof SyntaxError
+          ? "invalid_json"
+          : null;
+  const code = cause ? `${section}:${cause}` : section;
+  return publicStatusTelemetryError(code) === code ? code : section;
+}
 const STALE_CACHE_TTL_SECONDS = 900;
 const CI_STATUS_TTL_SECONDS = 7200;
 const WORKER_JOB_CACHE_TTL_SECONDS = 60;
@@ -527,8 +593,6 @@ const PR_PROOF_LABEL_NAMES = [
   "triage: mock-only-proof",
   "proof: sufficient",
   "proof: override",
-  "mantis: telegram-visible-proof",
-  "proof: telegram-e2e",
 ];
 const TRIAGE_VIEWS = [
   {
@@ -619,13 +683,6 @@ const PR_PROOF_VIEWS = [
     itemLimit: 100,
   },
   {
-    id: "telegram-proof",
-    title: "Telegram proof",
-    description: "PRs that need Telegram Test Server proof with the repository E2E skill.",
-    anyLabels: ["mantis: telegram-visible-proof", "proof: telegram-e2e"],
-    itemLimit: 100,
-  },
-  {
     id: "sufficient-with-need-label",
     title: "Sufficient + needs label",
     description:
@@ -635,8 +692,15 @@ const PR_PROOF_VIEWS = [
   },
 ];
 
-let githubAppTokenCache = null;
+// Only settled tokens are shared across requests. Workers cancels a request's
+// I/O when that request ends, so an in-flight mint shared with a later request
+// can never settle and stalls every caller until its deadline. In-flight mints
+// are deduplicated only within one status collection, which owns their I/O.
+const githubAppTokenCache = new Map<string, { token: string; expiresAtMs: number }>();
 let statusRefresh: { key: string; promise: ReturnType<typeof refreshStatusCaches> } | null = null;
+// The body can fail after headers resolve. Retain its actual request signal
+// without keeping completed responses alive or confusing collection cancellation.
+const githubResponseSignals = new WeakMap<Response, AbortSignal | undefined>();
 export const STATUS_REFRESH_TIMEOUT_MS = 18_000;
 type StatusCollectionPhase = "cache" | "refresh" | "github" | "github_auth" | "queue" | "store";
 
@@ -650,6 +714,7 @@ class StatusCollection {
   private readonly timer: ReturnType<typeof setTimeout>;
   private readonly cancelled: Promise<never>;
   private readonly pending = new Map<StatusCollectionPhase, number>();
+  readonly githubAppTokenMints = new Map<string, Promise<string>>();
 
   constructor(deadline = Date.now() + STATUS_REFRESH_TIMEOUT_MS) {
     this.deadline = deadline;
@@ -732,6 +797,16 @@ export class StatusStore {
     this.storage = state.storage;
     this.state = state;
     this.env = env;
+    const removeRetiredBayState = () =>
+      Promise.all([
+        this.storage.delete("openclaw-bay:terminal-state:v1"),
+        this.storage.delete("openclaw-bay:journey-state:v1"),
+      ]);
+    if (typeof state.blockConcurrencyWhile === "function") {
+      state.blockConcurrencyWhile(removeRetiredBayState);
+    } else {
+      void removeRetiredBayState();
+    }
   }
 
   async fetch(request: Request) {
@@ -783,6 +858,28 @@ export class StatusStore {
     if (request.method === "PUT") {
       const stored = (await request.json()) as StoredValue;
       if (typeof stored?.value !== "string") return new Response("invalid value", { status: 400 });
+      if (key.startsWith("snapshot:bay-scope:v2:")) {
+        const now = Date.now();
+        const incomingAt = statusPublicationTime(stored.value, now);
+        if (incomingAt === null) return new Response("invalid snapshot", { status: 400 });
+        // Collection completion releases its isolate before publication finishes.
+        // Fence delayed arrivals at the shared SQLite owner, without holding network work.
+        const accepted = this.storage.transactionSync(() => {
+          const current = this.storage.kv.get(key) as StoredValue | undefined;
+          const currentAt =
+            current && (!current.expires_at || current.expires_at > now)
+              ? statusPublicationTime(current.value, now)
+              : null;
+          if (currentAt !== null && incomingAt <= currentAt) return false;
+          this.storage.kv.put(key, stored);
+          return true;
+        });
+        if (accepted && stored.expires_at) await this.scheduleCleanup(stored.expires_at);
+        return new Response(null, {
+          status: 204,
+          headers: { "X-ClawSweeper-Snapshot": accepted ? "accepted" : "retained" },
+        });
+      }
       await this.storage.put(key, stored);
       if (stored.expires_at) await this.scheduleCleanup(stored.expires_at);
       return new Response(null, { status: 204 });
@@ -990,6 +1087,21 @@ export default {
     ) {
       return json({ error: "not_found" }, 404);
     }
+    if ((CENSUS_PATHS as readonly string[]).includes(url.pathname)) {
+      const response =
+        request.method !== "POST" || url.search
+          ? json({ error: "invalid_coverage_checkpoint_request" }, 400)
+          : await authenticatedCoverageCheckpoint(request, env);
+      const headers = new Headers(response.headers);
+      for (const key of [
+        "access-control-allow-origin",
+        "access-control-allow-methods",
+        "access-control-allow-headers",
+      ])
+        headers.delete(key);
+      headers.set("cache-control", "private, no-store");
+      return new Response(response.body, { status: response.status, headers });
+    }
     if (request.method === "OPTIONS") return cors(new Response(null, { status: 204 }));
     if (url.pathname === "/api/health") {
       return json({
@@ -1005,11 +1117,7 @@ export default {
     if (url.pathname === "/github/webhook" && request.method === "POST")
       return githubWebhook(request, env, ctx);
     if (url.pathname === "/github/target-dispatch" && request.method === "POST")
-      return githubTargetDispatch(request, env);
-    if (url.pathname === "/internal/exact-review/proof" && request.method === "POST")
-      return reviewProofRequest(request, env);
-    if (url.pathname === "/internal/exact-review/proof/producer" && request.method === "POST")
-      return reviewProofProducerRequest(request, env);
+      return githubTargetDispatch(request, env, ctx);
     if (url.pathname === "/internal/exact-review/command-intake" && request.method === "POST")
       return authenticatedHostedTargetQueueRequest(request, env, "/command-intake");
     if (
@@ -1023,6 +1131,8 @@ export default {
       return authenticatedHostedTargetQueueRequest(request, env, "/branch-authority");
     if (url.pathname === "/internal/exact-review/source-authority" && request.method === "POST")
       return authenticatedHostedTargetQueueRequest(request, env, "/source-authority");
+    if (url.pathname === "/internal/review-coverage/build" && request.method === "POST")
+      return authenticatedReviewCoverageBuildRead(request, env);
     if (url.pathname === "/internal/review-coverage/inventory" && request.method === "POST")
       return authenticatedExactReviewQueueRequest(request, env, "/review-coverage/inventory");
     const operationalCursorPath =
@@ -1048,6 +1158,16 @@ export default {
         url.pathname.slice("/internal/state".length),
         canonicalRecordPath[1] === "items",
       );
+    if (
+      url.pathname === "/internal/exact-review/canonical-bodies/maintenance" &&
+      request.method === "POST"
+    )
+      return authenticatedExactReviewQueueRequest(request, env, "/canonical-bodies/maintenance");
+    if (
+      url.pathname === "/internal/exact-review/read-model/compression" &&
+      request.method === "POST"
+    )
+      return authenticatedExactReviewQueueRequest(request, env, "/read-model/compression");
     if (url.pathname === "/internal/exact-review/storage-stats" && request.method === "POST")
       return authenticatedExactReviewQueueRequest(request, env, "/storage/stats");
     if (url.pathname === "/internal/state/records/slugs" && request.method === "POST")
@@ -1314,7 +1434,11 @@ export default {
     if (url.pathname === "/api/status") return statusJson(request, env, ctx);
     if (url.pathname === "/api/triage") return triageJson(request, env, ctx);
     if (url.pathname === "/api/pr-proof-triage") return prProofTriageJson(request, env, ctx);
-    if (url.pathname === "/" || url.pathname === "/index.html") return html(dashboardHtml(env));
+    if (
+      (request.method === "GET" || request.method === "HEAD") &&
+      isDashboardSitePath(url.pathname)
+    )
+      return dashboardSiteResponse(request, env);
     if (url.pathname === "/triage" || url.pathname === "/triage.html")
       return html(triageHtml(issueTriagePageConfig()));
     if (url.pathname === "/pr-proof-triage" || url.pathname === "/pr-proof-triage.html")
@@ -1335,19 +1459,38 @@ async function statusJson(request, env, ctx) {
   try {
     const cache = caches.default;
     const publicBayScope = publicBayRepositoryScope(verifiedPublicBayRepositories(env));
-    const cached = await statusOperation(env, "cache", () =>
-      cache.match(statusCacheRequest(request, "fresh", publicBayScope)),
-    );
-    if (cached) {
-      return await statusOperation(env, "cache", () => cachedStatusResponse(cached, "fresh", env));
-    }
-    const stale = await statusOperation(env, "cache", () =>
-      cache.match(statusCacheRequest(request, "stale", publicBayScope)),
-    );
-    if (stale) {
-      staleResponse = await statusOperation(env, "cache", () =>
-        cachedStatusResponse(stale, "stale", env),
+    if (isDurableStatusStore(env.STATUS_STORE)) {
+      const ttl = numberFrom(env.CACHE_TTL_SECONDS, 60);
+      const staleTtl = numberFrom(env.STALE_CACHE_TTL_SECONDS, STALE_CACHE_TTL_SECONDS);
+      const stored = await readCachedSnapshot(env, Math.max(ttl, staleTtl), publicBayScope);
+      if (stored) {
+        const state =
+          Date.now() - Date.parse(stored.generated_at) <= ttl * 1000 ? "fresh" : "stale";
+        const response = statusSnapshotResponse(
+          publicStatusProjection(stored, verifiedPublicBayRepositories(env)),
+          state,
+          env,
+        );
+        if (state === "fresh") return response;
+        staleResponse = response;
+      }
+    } else {
+      const cached = await statusOperation(env, "cache", () =>
+        cache.match(statusCacheRequest(request, "fresh", publicBayScope)),
       );
+      if (cached) {
+        return await statusOperation(env, "cache", () =>
+          cachedStatusResponse(cached, "fresh", env),
+        );
+      }
+      const stale = await statusOperation(env, "cache", () =>
+        cache.match(statusCacheRequest(request, "stale", publicBayScope)),
+      );
+      if (stale) {
+        staleResponse = await statusOperation(env, "cache", () =>
+          cachedStatusResponse(stale, "stale", env),
+        );
+      }
     }
     if (staleResponse && ctx?.waitUntil) {
       refreshStatus(request, env, ctx, collection.deadline).catch(() => undefined);
@@ -1746,6 +1889,7 @@ const PUBLIC_STATUS_TEXT_VALUES = new Set([
   "claim_stalled",
   "dispatcher_blocked",
   "dispatcher_paused",
+  "dispatcher_retry_due",
   "claim_delayed",
   "handoff_current",
   "handoff_unknown",
@@ -1976,6 +2120,7 @@ const PUBLIC_STATUS_COUNT_FIELDS = new Set([
   "source_drift_loop",
   "locked_conversation",
   "oversized_pull_request",
+  "maintainer_request_required",
   "claim_timeout",
   "execution_timeout",
   "workflow_cancelled",
@@ -2019,10 +2164,6 @@ const PUBLIC_STATUS_CONTAINER_FIELDS = new Set([
   "history",
   "points",
   "overall",
-  "inline_proof",
-  "requested",
-  "not_requested",
-  "unknown",
   "cluster_repair",
   "markers",
   "latest_runs",
@@ -3142,8 +3283,10 @@ export function publicStatusProjection(
   const errorCount = Math.max(declaredErrorCount, Math.min(sourceErrors.length, 20));
   document.diagnostics = {
     ...diagnostics,
-    // Keep a bounded incomplete-telemetry signal without retaining upstream text.
-    errors: Array.from({ length: Math.min(errorCount, 20) }, () => "telemetry_unavailable"),
+    // Only producer-owned codes survive repeated projection and durable caching.
+    errors: Array.from({ length: errorCount }, (_, index) =>
+      publicStatusTelemetryError(sourceErrors[index]),
+    ),
     error_count: errorCount,
   };
   if (hasExactReviewQueueObject) {
@@ -3349,27 +3492,31 @@ async function refreshStatusCaches(request, env, ctx?: DashboardContext) {
   // Final publication is best-effort and only uses a terminal, usable body.
   // Request cancellation must not leave process-global state blocking later writes.
   if (!looksEmpty) {
-    const writes = [
-      caches.default.put(
-        statusCacheRequest(request, "fresh", publicBayScope),
-        new Response(body, {
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": `public, max-age=${ttl}`,
-          },
-        }),
-      ),
-      caches.default.put(
-        statusCacheRequest(request, "stale", publicBayScope),
-        new Response(body, {
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": `public, max-age=${staleTtl}`,
-          },
-        }),
-      ),
-    ];
-    if (env.STATUS_STORE) {
+    // Edge caches cannot conditionally replace a body. A durable binding owns
+    // both publication and reads, so an old edge PUT cannot bypass its fence.
+    const writes = isDurableStatusStore(env.STATUS_STORE)
+      ? [writeCachedStatusSnapshot(env.STATUS_STORE, body, publicBayScope)]
+      : [
+          caches.default.put(
+            statusCacheRequest(request, "fresh", publicBayScope),
+            new Response(body, {
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": `public, max-age=${ttl}`,
+              },
+            }),
+          ),
+          caches.default.put(
+            statusCacheRequest(request, "stale", publicBayScope),
+            new Response(body, {
+              headers: {
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": `public, max-age=${staleTtl}`,
+              },
+            }),
+          ),
+        ];
+    if (env.STATUS_STORE && !isDurableStatusStore(env.STATUS_STORE)) {
       writes.push(writeCachedStatusSnapshot(env.STATUS_STORE, body, publicBayScope));
     }
     const persistence = Promise.allSettled(writes);
@@ -3675,7 +3822,17 @@ async function githubWebhook(request, env, ctx) {
 
   if ("type" in decision && decision.type === "item") {
     const source = objectValue(payload.pull_request || payload.issue);
-    if (requiresMaintainerReviewRequest(source)) {
+    if (
+      await requiresVerifiedMaintainerReviewRequest(decision.targetRepo, source, async (author) =>
+        githubTokenJson({
+          env,
+          token: stringEnv(env.GITHUB_TOKEN) || (await authorPermissionToken(env, decision)),
+          path: `/repos/${decision.targetRepo}/collaborators/${author}/permission`,
+          body: undefined,
+          errorLabel: "author repository permission",
+        }),
+      )
+    ) {
       if (
         ["opened", "ready_for_review"].includes(decision.sourceAction) &&
         source.draft !== true &&
@@ -3806,7 +3963,17 @@ async function githubWebhook(request, env, ctx) {
     return json({ ok: true, ...queued }, 202);
   }
 
-  const commentDecision = decision;
+  return handleGithubCommentCommand(env, ctx, decision, payload, deliveryHeaders.deliveryId);
+}
+
+// Shared by signed App webhooks and OIDC intake after its live GitHub hydration.
+async function handleGithubCommentCommand(
+  env,
+  ctx,
+  commentDecision: GithubWebhookIssueCommentClassification,
+  payload: GithubWebhookPayload,
+  sourceDeliveryId?: string | null,
+) {
   if (
     commentDecision.itemState === "open" &&
     typeof commentDecision.commentBody === "string" &&
@@ -3868,13 +4035,18 @@ async function githubWebhook(request, env, ctx) {
       pull_requests: "write",
     },
   });
-  const statusCommentId = await createFastAckCommentOnce({
-    env,
-    token: targetToken,
-    repo: commentDecision.targetRepo,
-    itemNumber: commentDecision.itemNumber,
-    sourceCommentId: commentDecision.commentId,
-  });
+  const statusCommentId = commentDecision.maintainerAuthorized
+    ? await createFastAckCommentOnce({
+        env,
+        token: targetToken,
+        repo: commentDecision.targetRepo,
+        itemNumber: commentDecision.itemNumber,
+        sourceCommentId: commentDecision.commentId,
+      }).catch(() => {
+        console.warn("ClawSweeper queued command acknowledgement unavailable");
+        return null;
+      })
+    : null;
   await addIssueCommentReaction({
     env,
     token: targetToken,
@@ -3896,7 +4068,7 @@ async function githubWebhook(request, env, ctx) {
           ? payload.comment?.updated_at || payload.comment?.created_at
           : payload.comment?.created_at || payload.comment?.updated_at,
       )
-        ? (deliveryHeaders.deliveryId ?? undefined)
+        ? (sourceDeliveryId ?? undefined)
         : undefined,
   });
   settleFastAckComments({
@@ -4279,6 +4451,25 @@ function classifyGithubItemWebhook({
   return { accepted: false, reason: "unsupported event" };
 }
 
+async function authorPermissionToken(
+  env: DashboardEnv,
+  decision: ExactReviewDecision & { installationId: number },
+): Promise<string> {
+  const credentials = githubAppCredentials(env);
+  if (!credentials || !Number.isInteger(decision.installationId) || decision.installationId <= 0) {
+    throw new Error("GitHub App credentials are required to read author permission");
+  }
+  const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
+  return createGithubAppTokenFor({
+    env,
+    appJwt,
+    installationId: decision.installationId,
+    label: decision.targetRepo,
+    repositories: [repoName(decision.targetRepo)],
+    permissions: { metadata: "read" },
+  });
+}
+
 async function bindLivePullRequestHeadAuthority({
   env,
   decision,
@@ -4571,9 +4762,9 @@ async function exactReviewQueueFetch(
   path: string,
   request?: Request,
   service: "exact_review_queue" | "github_etag_cache" = "exact_review_queue",
+  traceId = newExactReviewQueueTraceId(),
 ) {
   const body = request ? await request.text() : undefined;
-  const traceId = newExactReviewQueueTraceId();
   const endpoint = exactReviewQueueEndpointTemplate(path);
   const preparedHostedTarget = request?.headers.get(HOSTED_TARGET_ELIGIBILITY_HEADER);
   const authenticatedBodyFingerprint = request?.headers.get(
@@ -4621,34 +4812,49 @@ async function exactReviewQueueFetch(
       return { response, malformedServerResponse: true };
     }
   } catch (error) {
-    const failure = objectValue(error);
-    const remote = failure.remote === true;
-    const retryable = failure.retryable === true;
-    const overloaded = failure.overloaded === true;
     console.error(`${service}_request_failed`, {
       trace_id: traceId,
       endpoint,
       phase: "request",
       transport: "throw",
       upstream_status: null,
-      remote,
-      retryable,
-      overloaded,
-      failure_category: overloaded
-        ? "platform_overloaded"
-        : retryable
-          ? "platform_retryable"
-          : remote
-            ? "remote_exception"
-            : "request_exception",
+      ...queuePlatformFailure(error),
     });
     throw error;
   }
 }
 
+function queuePlatformFailure(error: unknown) {
+  const failure = objectValue(error);
+  const remote = failure.remote === true;
+  const retryable = failure.retryable === true;
+  const overloaded = failure.overloaded === true;
+  return {
+    remote,
+    retryable,
+    overloaded,
+    failure_category: overloaded
+      ? "platform_overloaded"
+      : retryable
+        ? "platform_retryable"
+        : remote
+          ? "remote_exception"
+          : "request_exception",
+  };
+}
+
 async function exactReviewQueueRequest(env, path, request?: Request) {
+  const maintenance =
+    path === "/canonical-bodies/maintenance" || path === "/read-model/compression";
+  const traceId = newExactReviewQueueTraceId();
+  const respond = (response: Response) => {
+    if (!maintenance) return response;
+    const headers = new Headers(response.headers);
+    headers.set(EXACT_REVIEW_QUEUE_TRACE_HEADER, traceId);
+    return new Response(response.body, { status: response.status, headers });
+  };
   const queue = exactReviewQueueStub(env);
-  if (!queue) return json({ error: "exact_review_queue_not_configured" }, 503);
+  if (!queue) return respond(json({ error: "exact_review_queue_not_configured" }, 503));
   try {
     const { response, malformedServerResponse } = await statusOperation(env, "queue", (signal) =>
       exactReviewQueueFetch(
@@ -4657,166 +4863,36 @@ async function exactReviewQueueRequest(env, path, request?: Request) {
         signal
           ? new Request(request || `https://clawsweeper-exact-review-queue${path}`, { signal })
           : request,
+        "exact_review_queue",
+        traceId,
       ),
     );
-    return malformedServerResponse
-      ? json({ error: "exact_review_queue_unavailable" }, response.status)
-      : response;
-  } catch {
-    return json({ error: "exact_review_queue_unavailable" }, 500);
+    return respond(
+      malformedServerResponse
+        ? json(
+            {
+              error: "exact_review_queue_unavailable",
+              ...(maintenance ? { failure_category: "malformed_server_response" } : {}),
+            },
+            response.status,
+          )
+        : response,
+    );
+  } catch (error) {
+    // Only the authenticated maintenance owner receives closed platform metadata.
+    // Remote/retryable are observations, not instructions to retry a mutation.
+    return respond(
+      json(
+        {
+          error: "exact_review_queue_unavailable",
+          ...(maintenance
+            ? { failure_category: queuePlatformFailure(error).failure_category }
+            : {}),
+        },
+        500,
+      ),
+    );
   }
-}
-
-async function reviewProofQueue(env, path: string, body: unknown) {
-  return exactReviewQueueRequest(
-    env,
-    path,
-    new Request("https://queue" + path, { method: "POST", body: JSON.stringify(body) }),
-  );
-}
-
-async function reviewProofRequest(request: Request, env) {
-  const text = await boundedCommandProofBody(request);
-  if (text === null) return json({ error: "invalid_review_proof_request" }, 413);
-  const body = parseJsonObject(text);
-  if (!body || !["request", "poll", "capabilities"].includes(body.operation))
-    return json({ error: "invalid_review_proof_request" }, 400);
-  const admission = await reviewProofQueue(env, "/review-proof", body);
-  if (!admission.ok) return admission;
-  const admitted = (await admission.json()) as any;
-  if (body.operation === "capabilities") return json(admitted);
-  const update = async (patch) => {
-    const response = await reviewProofQueue(env, "/review-proof/update", {
-      ...patch,
-      lease: body.lease,
-      requestId: admitted.record.requestId,
-    });
-    return response.json();
-  };
-  try {
-    const credentials = githubAppCredentials(env);
-    if (!credentials) throw new Error("github_app_not_configured");
-    const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
-    // Never broaden the general read-only dashboard token or return this token to the reviewer.
-    const token = await createGithubAppTokenFor({
-      env,
-      appJwt,
-      installationId: await githubAppInstallationId(appJwt, "openclaw/openclaw", env),
-      label: "review-proof",
-      repositories: ["openclaw"],
-      permissions: { actions: "write", contents: "read", pull_requests: "read" },
-    });
-    const { executeReviewProof } = await import("./review-proof-execution.ts");
-    const result = await executeReviewProof({
-      record: admitted.record,
-      target: admitted.target,
-      dispatch: admitted.dispatch === true,
-      github: (path, value) =>
-        githubTokenJson({
-          env,
-          token,
-          path: "/" + path,
-          method: value === undefined ? "GET" : "POST",
-          body: value,
-          errorLabel: "Proof GitHub",
-          apiVersion: "2026-03-10",
-        }),
-      artifact: (id) => reviewProofArtifact(env, token, id),
-      update,
-    });
-    return json({
-      ...result,
-      requestId: admitted.record.requestId,
-      planSha256: admitted.record.planSha256,
-      expiresAt: admitted.record.expiresAt,
-    });
-  } catch {
-    await update({ state: "inconclusive", reason: "proof_execution_unavailable" });
-    return json({ state: "inconclusive", reason: "proof_execution_unavailable" });
-  }
-}
-
-async function reviewProofProducerRequest(request: Request, env) {
-  const text = await boundedCommandProofBody(request);
-  const body = text === null ? null : parseJsonObject(text);
-  if (
-    !body ||
-    !/^[0-9a-f]{64}$/.test(body.requestId || "") ||
-    !/^[1-9][0-9]{0,19}$/.test(body.runId || "") ||
-    body.runAttempt !== 1
-  )
-    return json({ error: "invalid_producer_request" }, 400);
-  const identity = await authenticateReviewProofProducerToken(bearerToken(request));
-  if (!identity || identity.runId !== body.runId || identity.runAttempt !== body.runAttempt)
-    return json({ error: "producer_not_authorized" }, 403);
-  const response = await reviewProofQueue(env, "/review-proof/producer-record", body);
-  if (!response.ok) return json({ error: "proof_not_active" }, 409);
-  const { record } = (await response.json()) as any;
-  if (
-    body.planSha256 !== record.planSha256 ||
-    !reviewProofProducerMatches(identity, {
-      ...record.producer,
-      runId: body.runId,
-      runAttempt: body.runAttempt,
-    })
-  )
-    return json({ error: "producer_not_authorized" }, 403);
-  // OIDC pins the workflow/run; this final durable check also fences owner loss during verification.
-  const redeemed = await reviewProofQueue(env, "/review-proof/redeem", body);
-  if (!redeemed.ok) return json({ error: "proof_not_active" }, 409);
-  return json({ ok: true, expiresAt: record.expiresAt });
-}
-
-async function reviewProofArtifact(env, token: string, id: string): Promise<Uint8Array> {
-  if (!/^[1-9][0-9]{0,19}$/.test(id)) throw new Error("invalid_artifact_id");
-  let response = await fetch(
-    githubApiUrl(env, `/repos/openclaw/openclaw/actions/artifacts/${id}/zip`),
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "clawsweeper-review-proof",
-      },
-      redirect: "manual",
-      signal: AbortSignal.timeout(20_000),
-    },
-  );
-  if (response.status === 302) {
-    const target = new URL(response.headers.get("location") || "");
-    await response.body?.cancel();
-    if (
-      target.protocol !== "https:" ||
-      target.username ||
-      target.password ||
-      ![".blob.core.windows.net", ".actions.githubusercontent.com"].some((suffix) =>
-        target.hostname.endsWith(suffix),
-      )
-    )
-      throw new Error("invalid_artifact_redirect");
-    response = await fetch(target, { redirect: "error", signal: AbortSignal.timeout(30_000) });
-  }
-  if (!response.ok) throw new Error("artifact_unavailable");
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("artifact_unavailable");
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    total += chunk.value.length;
-    if (total > 16 * 1024 * 1024) {
-      await reader.cancel();
-      throw new Error("artifact_too_large");
-    }
-    chunks.push(chunk.value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return bytes;
 }
 
 const PUBLIC_QUEUE_COUNT_LIMIT = 1_000_000;
@@ -4842,6 +4918,7 @@ const PUBLIC_QUEUE_PARKED_REASONS = [
   "source_drift_loop",
   "locked_conversation",
   "oversized_pull_request",
+  "maintainer_request_required",
   "unknown",
 ] as const;
 const PUBLIC_QUEUE_SHED_REASONS = ["backpressure", "scheduled_rate", "unattributed"] as const;
@@ -4864,6 +4941,63 @@ function publicQueueCount(value, maximum = PUBLIC_QUEUE_COUNT_LIMIT) {
 function publicQueueTimestamp(value) {
   if (value === null || value === undefined) return null;
   return publicTimestamp(value);
+}
+
+function publicPublicationHandoff(value) {
+  const source = objectValue(value);
+  const observedAt = publicQueueTimestamp(source.observed_at);
+  const samples = publicQueueCount(source.sample_count);
+  const retained = publicQueueCount(source.retained_batches);
+  const states = [
+    "idle",
+    "dispatching",
+    "awaiting_claim",
+    "claimed",
+    "dispatch_failed",
+    "reservation_expired",
+  ];
+  const ids = ["under_1m", "1m_to_5m", "5m_to_10m", "over_10m"];
+  if (
+    !observedAt ||
+    samples === null ||
+    retained === null ||
+    samples > retained ||
+    !states.includes(source.dispatch_state) ||
+    !Array.isArray(source.delay_buckets) ||
+    source.delay_buckets.length !== ids.length
+  )
+    return null;
+  const buckets = source.delay_buckets.map((entry, index) => {
+    const bucket = objectValue(entry);
+    return bucket.id === ids[index] && publicQueueCount(bucket.count) !== null
+      ? { id: ids[index], count: publicQueueCount(bucket.count)! }
+      : null;
+  });
+  if (
+    buckets.some((bucket) => bucket === null) ||
+    buckets.reduce((sum, bucket) => sum + (bucket?.count ?? 0), 0) !== samples
+  )
+    return null;
+  const first = publicQueueTimestamp(source.first_claim_at);
+  const last = publicQueueTimestamp(source.last_claim_at);
+  const wait =
+    source.dispatch_wait_seconds === null ? null : publicQueueCount(source.dispatch_wait_seconds);
+  if (
+    (samples > 0 && (!first || !last || first > last || last > observedAt)) ||
+    (samples === 0 && (first !== null || last !== null)) ||
+    (source.dispatch_state === "awaiting_claim" ? wait === null : wait !== null)
+  )
+    return null;
+  return {
+    observed_at: observedAt,
+    sample_count: samples,
+    retained_batches: retained,
+    first_claim_at: first,
+    last_claim_at: last,
+    dispatch_state: source.dispatch_state,
+    dispatch_wait_seconds: wait,
+    delay_buckets: buckets,
+  };
 }
 
 // Scheduled admission balances carry organic debt down to -burst, so they may be negative.
@@ -5090,6 +5224,7 @@ function publicExactReviewFailureHealth(value) {
 function publicExactReviewRunawayHealth(value, allowedRepositories: ReadonlySet<string>) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
   const source = objectValue(value);
+  const countingBasis = source.counting_basis;
   const status = String(source.status || "");
   const reason = source.reason ?? null;
   const windowHours = publicQueueCount(source.window_hours, 24 * 7);
@@ -5105,6 +5240,7 @@ function publicExactReviewRunawayHealth(value, allowedRepositories: ReadonlySet<
           ? null
           : undefined;
   if (
+    (countingBasis !== undefined && countingBasis !== "claimed_review_runs") ||
     expectedReason === undefined ||
     reason !== expectedReason ||
     windowHours === null ||
@@ -5130,6 +5266,7 @@ function publicExactReviewRunawayHealth(value, allowedRepositories: ReadonlySet<
     if (sample.length >= PUBLIC_RUNAWAY_SAMPLE_LIMIT) break;
   }
   return {
+    ...(countingBasis === undefined ? {} : { counting_basis: countingBasis }),
     status,
     reason,
     window_hours: windowHours,
@@ -5151,6 +5288,7 @@ function publicExactReviewHandoff(value) {
       "claim_stalled",
       "dispatcher_blocked",
       "dispatcher_paused",
+      "dispatcher_retry_due",
       "claim_delayed",
       "handoff_current",
     ].includes(reason)
@@ -5341,6 +5479,8 @@ export function publicExactReviewQueueProjection(
       source.review_runaway_health,
       allowedRepositories,
     ),
+    warning_evidence: publicWarningEvidence(source.warning_evidence, allowedRepositories),
+    publication_handoff: publicPublicationHandoff(source.publication_handoff),
     manual_publication:
       objectValue(source.manual_publication).policy === "record_comment_only"
         ? {
@@ -5438,6 +5578,69 @@ async function publicReviewObservabilityJson(env, params: URLSearchParams) {
   );
 }
 
+async function authenticatedCoverageCheckpoint(request: Request, env) {
+  const secret = stringEnv(env.CLAWSWEEPER_WEBHOOK_SECRET);
+  if (!secret) return json({ error: "webhook_not_configured" }, 503);
+  const signature = request.headers.get("x-clawsweeper-exact-review-signature") || "";
+  if (!signature) return json({ error: "invalid_signature" }, 401);
+  const body = await boundedTargetDispatchBody(request, CENSUS.wireBytes);
+  if (body === null) return json({ error: "coverage_checkpoint_too_large" }, 413);
+  const path = new URL(request.url).pathname;
+  if (
+    !(await verifyGithubWebhookSignature({
+      bodyText: censusSignatureInput(path, body),
+      signature,
+      secret,
+    }))
+  )
+    return json({ error: "invalid_signature" }, 401);
+  return exactReviewQueueRequest(
+    env,
+    path.replace("/internal", ""),
+    new Request("https://internal.invalid" + path.replace("/internal", ""), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+    }),
+  );
+}
+
+async function authenticatedReviewCoverageBuildRead(request: Request, env) {
+  const secret = stringEnv(env.CLAWSWEEPER_WEBHOOK_SECRET);
+  if (!secret) return json({ error: "webhook_not_configured" }, 503);
+  const signature = request.headers.get("x-clawsweeper-exact-review-signature") || "";
+  if (!signature) return json({ error: "invalid_signature" }, 401);
+  const body = await boundedTargetDispatchBody(request, 128);
+  if (body === null) return json({ error: "coverage_build_request_too_large" }, 413);
+  if (
+    !(await verifyGithubWebhookSignature({
+      secret,
+      signature,
+      bodyText: "coverage-build-read-v1\nPOST\n/internal/review-coverage/build\n" + body,
+    }))
+  )
+    return json({ error: "invalid_signature" }, 401);
+  // Closed purpose on a fixed method/path; a signature over another request
+  // never authorizes a mutation, arbitrary queue route or identifying query.
+  if (body !== '{"purpose":"dashboard-site-coverage-v1"}' || new URL(request.url).search)
+    return json({ error: "invalid_coverage_build_read" }, 400);
+  try {
+    const response = await exactReviewQueueRequest(env, "/review-coverage");
+    const projection = response.ok
+      ? privateReviewCoverageProjection(await response.json().catch(() => null))
+      : null;
+    if (!projection) return json({ error: "review_coverage_unavailable" }, 503);
+    return new Response(JSON.stringify(projection), {
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "private, no-store",
+      },
+    });
+  } catch {
+    return json({ error: "review_coverage_unavailable" }, 503);
+  }
+}
+
 async function publicReviewCoverageJson(env) {
   return publicExactReviewProjectionJson(
     env,
@@ -5506,9 +5709,9 @@ export async function exactReviewQueueStatusSnapshot(
   return body;
 }
 
-async function boundedCommandProofBody(
+async function boundedTargetDispatchBody(
   request: Request,
-  maxBytes = 128 * 1024,
+  maxBytes: number,
 ): Promise<string | null> {
   if (!request.body) return "";
   const reader = request.body.getReader();
@@ -5537,7 +5740,7 @@ async function boundedCommandProofBody(
   }
 }
 
-async function githubEtagCacheRequest(env, path: string, body: string) {
+async function githubEtagCacheRequest(env, path: string, body: string, signal?: AbortSignal) {
   const namespace: DurableObjectNamespace | undefined = env.GITHUB_ETAG_CACHE;
   if (!namespace) return json({ error: "github_etag_cache_not_configured" }, 503);
   try {
@@ -5550,7 +5753,7 @@ async function githubEtagCacheRequest(env, path: string, body: string) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body,
-        signal: statusRequestSignal(env),
+        signal: statusRequestSignal(env, signal),
       }),
       "github_etag_cache",
     );
@@ -5605,15 +5808,110 @@ async function authenticatedHostedTargetQueueRequest(request, env, path: string)
 
 // Target dispatchers enqueue here with their workflow's OIDC identity instead of
 // spending one ClawSweeper Actions relay run per `repository_dispatch`. Any
-// non-2xx answer makes the dispatcher fall back to that unchanged relay.
-async function githubTargetDispatch(request: Request, env) {
-  const text = await boundedCommandProofBody(request, TARGET_DISPATCH_MAX_BODY_BYTES);
+// non-2xx answer leaves delivery to the independent App webhook route.
+async function githubTargetDispatch(request: Request, env, ctx) {
+  const text = await boundedTargetDispatchBody(request, TARGET_DISPATCH_MAX_BODY_BYTES);
   if (text === null) return json({ error: "target_dispatch_too_large_or_invalid" }, 413);
-  const identity = await authenticateTargetDispatchToken(bearerToken(request));
-  if (!identity) return json({ error: "target_dispatch_not_authorized" }, 401);
-  const intake = targetDispatchQueueIntake(parseJsonObject(text), identity);
+  const authentication = await authenticateTargetDispatchToken(bearerToken(request));
+  if (authentication.ok === false) {
+    if (authentication.reason === "unavailable") {
+      const response = json({ error: "target_dispatch_verifier_unavailable" }, 503);
+      response.headers.set("retry-after", "30");
+      return response;
+    }
+    return json({ error: "target_dispatch_not_authorized" }, 401);
+  }
+  const { identity } = authentication;
+  const payload = parseJsonObject(text);
+  if (identity.eventName === "issue_comment" || payload?.source_event === "issue_comment") {
+    return githubTargetCommentDispatch(payload, identity, env, ctx);
+  }
+  const intake = targetDispatchQueueIntake(payload, identity);
   if ("error" in intake) return json({ error: intake.error }, intake.status);
   return hostedTargetQueueRequest(env, "/enqueue", JSON.stringify(intake.body));
+}
+
+async function githubTargetCommentDispatch(payload, identity: TargetDispatchIdentity, env, ctx) {
+  const intake = targetDispatchCommentIntake(payload, identity);
+  if (!intake.ok) return json({ error: intake.error }, intake.status);
+  const eligibility = await workerHostedTargetEligibility(env, intake.targetRepo);
+  if (eligibility.outcome !== "eligible") {
+    if (eligibility.outcome === "terminal")
+      return hostedTargetProbeResponse({ outcome: "terminal" });
+    return hostedTargetProbeResponse({ outcome: "retryable" });
+  }
+  const admission = await workerHostedTargetVisibilityAdmission(env, intake.targetRepo);
+  if (admission.outcome !== "public") return hostedTargetProbeResponse(admission);
+  const credentials = githubAppCredentials(env);
+  if (!credentials) return json({ error: "github_app_not_configured" }, 503);
+  try {
+    const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
+    const installationId = await githubAppInstallationId(appJwt, intake.targetRepo, env);
+    const token = await createGithubAppTokenFor({
+      env,
+      appJwt,
+      installationId,
+      label: intake.targetRepo,
+      repositories: [repoName(intake.targetRepo)],
+      permissions: { issues: "read", pull_requests: "read" },
+    });
+    const repository = await githubTokenJson({
+      env,
+      token,
+      path: `/repos/${intake.targetRepo}`,
+      body: undefined,
+      errorLabel: "target dispatch repository",
+    });
+    if (
+      String(repository.full_name || "").toLowerCase() !== intake.targetRepo.toLowerCase() ||
+      !repository.default_branch ||
+      identity.ref !== `refs/heads/${repository.default_branch}` ||
+      repository.private !== false
+    )
+      return json({ error: "target_dispatch_identity_mismatch" }, 403);
+    const comment = await githubTokenJson({
+      env,
+      token,
+      path: `/repos/${intake.targetRepo}/issues/comments/${intake.commentId}`,
+      body: undefined,
+      errorLabel: "target dispatch live comment",
+    });
+    if (
+      comment.id !== intake.commentId ||
+      String(comment.issue_url || "").toLowerCase() !==
+        `https://api.github.com/repos/${intake.targetRepo}/issues/${intake.itemNumber}`.toLowerCase() ||
+      typeof comment.body !== "string" ||
+      !exactWebhookTimestamp(comment.updated_at)
+    )
+      return json({ error: "target_dispatch_comment_mismatch" }, 403);
+    const issue = await githubTokenJson({
+      env,
+      token,
+      path: `/repos/${intake.targetRepo}/issues/${intake.itemNumber}`,
+      body: undefined,
+      errorLabel: "target dispatch live item",
+    });
+    if (issue.number !== intake.itemNumber)
+      return json({ error: "target_dispatch_comment_mismatch" }, 403);
+    const livePayload = {
+      action: intake.sourceAction,
+      repository,
+      issue,
+      comment,
+      installation: { id: installationId },
+    };
+    const decision = classifyGithubIssueCommentWebhook({
+      event: "issue_comment",
+      payload: livePayload,
+      hostedTargetEligible: true,
+    });
+    if (!decision.accepted || decision.type !== "issue_comment") {
+      return json({ ok: true, accepted: false, reason: "not an authorized command" }, 202);
+    }
+    return await handleGithubCommentCommand(env, ctx, decision, livePayload);
+  } catch {
+    return json({ error: "target_dispatch_comment_unavailable" }, 503);
+  }
 }
 
 async function hostedTargetQueueRequest(env, path: string, body: string) {
@@ -6559,33 +6857,31 @@ async function statusSnapshot(env) {
     .filter(Boolean);
   const budget = numberFrom(env.WORKER_BUDGET, 32);
   const activeRunErrors = [];
-  const [runs, completedRuns, activeRunCandidates] = await Promise.all([
-    github(`/repos/${repo}/actions/runs?per_page=100`).catch((error) => {
-      errors.push(`workflow runs: ${error.message}`);
-      return null;
-    }),
+  // The status-filtered reads cover every run state. An unfiltered listing is
+  // slow on this repository's run history and timed out the refresh deadline.
+  const [completedRuns, activeRunCandidates] = await Promise.all([
     github(`/repos/${repo}/actions/runs?status=completed&per_page=100`).catch((error) => {
-      errors.push(`workflow runs completed: ${error.message}`);
+      errors.push(statusTelemetryError("completed_workflow_runs_unavailable", error));
       return null;
     }),
     activeWorkflowRunCandidates(env, repo, activeRunErrors, github),
   ]);
-  const operationalRunCandidates = activeRunCandidates;
   errors.push(...activeRunErrors);
-  const workflowRuns = Array.isArray(runs?.workflow_runs) ? runs.workflow_runs : [];
-  const completedWorkflowRuns = uniqueWorkflowRuns([
+  // Reconcile observations before splitting lifecycle views, so a completion or
+  // rerun retires stale rows everywhere. Feed position cannot establish recency.
+  const workflowRuns = uniqueWorkflowRuns([
+    ...activeRunCandidates,
     ...(Array.isArray(completedRuns?.workflow_runs) ? completedRuns.workflow_runs : []),
-    ...workflowRuns.filter((run) => run.status === "completed"),
-  ]).sort(newestWorkflowRunFirst);
-  const activeRuns = uniqueWorkflowRuns([
-    ...activeRunCandidates.filter((run) => isActiveWorkflowRun(run)),
-    ...workflowRuns.filter((run) => isActiveWorkflowRun(run)),
-  ]).sort(newestWorkflowRunFirst);
+  ]);
+  const completedWorkflowRuns = workflowRuns
+    .filter((run) => run.status === "completed")
+    .sort(newestWorkflowRunFirst);
+  const activeRuns = workflowRuns.filter(isActiveWorkflowRun).sort(newestWorkflowRunFirst);
   const workerRuns = activeRuns.filter((run) => !isSupportWorkflowRun(run));
   const supportRuns = activeRuns.filter((run) => isSupportWorkflowRun(run));
   const controlPlane = controlPlaneSnapshot(activeRuns);
   const operationalHealth = summarizeOperationalHealth(
-    operationalRunCandidates.filter((run) => !isSupportWorkflowRun(run)),
+    workflowRuns.filter((run) => !isSupportWorkflowRun(run)),
     generatedAt,
     activeRunErrors.length === 0,
   );
@@ -6613,7 +6909,7 @@ async function statusSnapshot(env) {
       ),
       "worker health",
     ).catch((error) => {
-      errors.push(error.message);
+      errors.push(statusTelemetryError("worker_health_unavailable", error));
       return emptyWorkerHealth(generatedAt);
     }),
     withTimeout(
@@ -6621,7 +6917,7 @@ async function statusSnapshot(env) {
       OPTIONAL_SECTION_TIMEOUT_MS,
       "pipeline",
     ).catch((error) => {
-      errors.push(error.message);
+      errors.push(statusTelemetryError("pipeline_unavailable", error));
       return workerRuns.slice(0, 30).map((run) => classifyRun(run));
     }),
     withTimeout(
@@ -6629,7 +6925,7 @@ async function statusSnapshot(env) {
       OPTIONAL_SECTION_TIMEOUT_MS,
       "apply health",
     ).catch((error) => {
-      errors.push(error.message);
+      errors.push(statusTelemetryError("apply_health_unavailable", error));
       return emptyApplyHealthStatus(targetRepos);
     }),
     withTimeout(
@@ -6637,16 +6933,20 @@ async function statusSnapshot(env) {
       OPTIONAL_SECTION_TIMEOUT_MS,
       "recent closed",
     ).catch((error) => {
-      errors.push(error.message);
+      errors.push(statusTelemetryError("recent_closed_unavailable", error));
       return { items: [], stats: emptyClosedStats(generatedAt) };
     }),
     readEvents(env).catch((error) => {
-      errors.push(`events: ${error.message}`);
+      errors.push(statusTelemetryError("events_unavailable", error));
       return [];
     }),
   ]);
-  errors.push(...activeJobs.errors);
-  errors.push(...workerHealth.errors);
+  errors.push(
+    ...activeJobs.errors.map((error) => statusTelemetryError("active_jobs_unavailable", error)),
+  );
+  errors.push(
+    ...workerHealth.errors.map((error) => statusTelemetryError("worker_health_unavailable", error)),
+  );
   statusCollections.get(env)?.check();
   const { recent_attempts: _recentAttempts, ...publicWorkerHealth } = workerHealth;
 
@@ -7431,9 +7731,6 @@ function proofStateFromLabels(labels) {
   if (has("proof: sufficient")) return "Sufficient";
   if (has("triage: mock-only-proof")) return "Mock-only proof";
   if (has("triage: needs-real-behavior-proof")) return "Needs proof";
-  if (has("mantis: telegram-visible-proof") || has("proof: telegram-e2e")) {
-    return "Telegram proof";
-  }
   return "";
 }
 
@@ -7488,7 +7785,7 @@ async function activeWorkerSnapshot(
     fetchConcurrency,
     async (run) => {
       try {
-        const jobSnapshot = await workflowJobsForRunSnapshot(env, repo, run.id, github, run);
+        const jobSnapshot = await workflowJobsForRunSnapshot(env, repo, run, github);
         const jobs = jobSnapshot.jobs;
         const activeJobs = jobs.filter((job) => isActiveWorkflowJob(job));
         return {
@@ -7508,7 +7805,7 @@ async function activeWorkerSnapshot(
           codexWorkers: 0,
           hasWorkerJobs: false,
           complete: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: statusTelemetryError("active_jobs_unavailable", error),
         };
       }
     },
@@ -7521,7 +7818,7 @@ async function activeWorkerSnapshot(
   for (const result of results) {
     codexWorkers += result.codexWorkers;
     if (result.error) {
-      errors.push(`workflow jobs ${result.run.id}: ${result.error}`);
+      errors.push(result.error);
       if (isCodexWorkflowFallback(result.run)) {
         workers.push(normalizeFallbackWorker(result.run));
         fallbacks += 1;
@@ -7589,29 +7886,33 @@ async function recentWorkerHealth(
   github: GithubJsonReader = (path) => githubJson(env, path),
 ) {
   const cacheKey = `worker-health:v3:${String(repo || "").toLowerCase()}`;
-  const cached = await readStoredJson(env, cacheKey);
-  if (cached) return workerHealthStorageProjection(cached);
-
   const completedRuns = recentWorkerHealthRunSample(runs);
+  const sampleKey = JSON.stringify(
+    completedRuns.map((run) => [String(run.id), run.run_attempt]).sort(),
+  );
+  const cached = await readStoredJson(env, cacheKey);
+  // The repository slot may outlive a rerun. Reuse its aggregate only while
+  // the selected completed attempts are unchanged, or old failures survive it.
+  if (cached?.sample_key === sampleKey) return workerHealthStorageProjection(cached);
+
   const fetchConcurrency = workerHealthFetchConcurrency(env);
   const results = await mapWithConcurrency(
     completedRuns,
     fetchConcurrency,
     async (run) => {
       try {
+        const jobSnapshot = await workflowJobsForRunSnapshot(env, repo, run, github);
         return {
-          attempts: (await workflowJobsForRun(env, repo, run.id, github, run))
+          attempts: jobSnapshot.jobs
             .filter((job) => isCodexWorkerJob(job))
             .map((job) => workerHealthAttempt(run, job))
             .filter(Boolean),
-          error: null,
+          error: jobSnapshot.complete ? null : "worker_health_unavailable",
         };
       } catch (error) {
         return {
           attempts: [],
-          error: `worker health run ${run.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          error: statusTelemetryError("worker_health_unavailable", error),
         };
       }
     },
@@ -7666,7 +7967,7 @@ async function recentWorkerHealth(
   await writeStoredJson(
     env,
     cacheKey,
-    workerHealthStorageProjection(health),
+    { ...workerHealthStorageProjection(health), sample_key: sampleKey },
     numberFrom(env.WORKER_HEALTH_CACHE_TTL_SECONDS, WORKER_HEALTH_CACHE_TTL_SECONDS),
   );
   return health;
@@ -7688,7 +7989,10 @@ function workerHealthStorageProjection(health) {
     // the in-memory status projection for the current request.
     recent_attempts: [],
     failures: publicStatusValue(health.failures, "failures", 0),
-    errors: [],
+    // A cached partial sample must retain the same failure signal as its first read.
+    errors: health.errors
+      .slice(0, 10)
+      .map((error) => statusTelemetryError("worker_health_unavailable", error)),
     updated_at: health.updated_at,
   };
 }
@@ -7848,11 +8152,7 @@ async function attachWorkerTargets(env, workers, errors) {
               ),
             );
           } catch (error) {
-            errors.push(
-              `worker target titles ${repository}: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            );
+            errors.push(statusTelemetryError("active_jobs_unavailable", error));
           }
         }),
       ),
@@ -7939,17 +8239,11 @@ async function mapWithConcurrency<Item, Result>(
   return results;
 }
 
-async function workflowJobsForRun(
-  env,
-  repo,
-  runId,
-  github: GithubJsonReader = (path) => githubJson(env, path),
-  run?: WorkflowRunSummary,
+function boundedWorkflowJobCensus(
+  value: unknown,
+  run: WorkflowRunSummary,
+  claimedComplete: boolean,
 ) {
-  return (await workflowJobsForRunSnapshot(env, repo, runId, github, run)).jobs;
-}
-
-function boundedWorkflowJobCensus(value: unknown, runId, claimedComplete: boolean) {
   const source = Array.isArray(value) ? value : [];
   const limit = WORKER_JOB_PAGE_LIMIT * 100;
   const bounded = source.slice(0, limit);
@@ -7961,7 +8255,8 @@ function boundedWorkflowJobCensus(value: unknown, runId, claimedComplete: boolea
       !Number.isSafeInteger(record.id) ||
       Number(record.id) <= 0 ||
       !Number.isSafeInteger(record.run_id) ||
-      Number(record.run_id) !== Number(runId) ||
+      Number(record.run_id) !== Number(run.id) ||
+      (record.run_attempt !== undefined && record.run_attempt !== run.run_attempt) ||
       seenJobIds.has(Number(record.id))
     ) {
       return false;
@@ -7976,17 +8271,17 @@ function boundedWorkflowJobCensus(value: unknown, runId, claimedComplete: boolea
 export async function workflowJobsForRunSnapshot(
   env,
   repo,
-  runId,
+  run: WorkflowRunSummary,
   github: GithubJsonReader = (path) => githubJson(env, path),
-  run?: WorkflowRunSummary,
 ) {
-  const key = `workflow-jobs:${repo}:${runId}`;
-  const cached = await readStoredJson(env, key);
-  if (Array.isArray(cached)) return boundedWorkflowJobCensus(cached, runId, false);
-  const cachedRecord = objectValue(cached);
-  if (cachedRecord.schema_version === 1 && Array.isArray(cachedRecord.jobs)) {
-    return boundedWorkflowJobCensus(cachedRecord.jobs, runId, false);
+  if (!Number.isSafeInteger(run.run_attempt) || Number(run.run_attempt) < 1) {
+    throw new Error("Workflow run attempt unavailable");
   }
+  const runId = run.id;
+  // Reruns keep their run ID. Bind both caches and pagination to the selected
+  // attempt so a prior terminal job or a newer rerun cannot replace its workers.
+  const key = `workflow-jobs:${repo}:${runId}:${run.run_attempt}`;
+  const cachedRecord = objectValue(await readStoredJson(env, key));
   if (
     cachedRecord.schema_version === 2 &&
     Array.isArray(cachedRecord.jobs) &&
@@ -7998,7 +8293,7 @@ export async function workflowJobsForRunSnapshot(
         : null;
     return boundedWorkflowJobCensus(
       cachedRecord.jobs,
-      runId,
+      run,
       cachedRecord.complete === true &&
         totalCount !== null &&
         cachedRecord.jobs.length === totalCount,
@@ -8009,7 +8304,7 @@ export async function workflowJobsForRunSnapshot(
   let expectedTotalCount: number | null = null;
   for (let page = 1; page <= WORKER_JOB_PAGE_LIMIT; page += 1) {
     const payload = await github(
-      `/repos/${repo}/actions/runs/${runId}/jobs?filter=latest&per_page=100&page=${page}`,
+      `/repos/${repo}/actions/runs/${runId}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
     );
     if (!Array.isArray(payload?.jobs)) break;
     const pageJobs = payload.jobs;
@@ -8030,7 +8325,7 @@ export async function workflowJobsForRunSnapshot(
     }
     if (jobs.length > expectedTotalCount || pageJobs.length < 100) break;
   }
-  const census = boundedWorkflowJobCensus(jobs, runId, complete);
+  const census = boundedWorkflowJobCensus(jobs, run, complete);
   const hasActiveWorker = census.jobs.some(
     (job) => isActiveWorkflowJob(job) && isDashboardWorkerJob(job, run),
   );
@@ -8202,18 +8497,54 @@ async function activeWorkflowRunCandidates(
 ) {
   const pages = await Promise.all(
     ACTIVE_RUN_STATUS_FILTERS.map(async (status) => {
-      const runs = await github(`/repos/${repo}/actions/runs?status=${status}&per_page=100`).catch(
-        (error) => {
-          errors.push(`workflow runs ${status}: ${error.message}`);
-          return null;
-        },
-      );
-      const workflowRuns = Array.isArray(runs?.workflow_runs) ? runs.workflow_runs : [];
-      // Sampling stays at five cheap status queries. A full page may omit the
-      // oldest (and therefore least healthy) runs, so fail closed instead of
-      // spending an unbounded number of follow-up requests.
-      if (workflowRuns.length >= 100) errors.push(`workflow runs ${status}: page may be truncated`);
-      return workflowRuns;
+      for (let attempt = 0; ; attempt += 1) {
+        const workflowRuns = [];
+        let expectedTotalCount: number | null = null;
+        let complete = false;
+        let changedDuringRead = false;
+        // Include the oldest runs without allowing a large backlog to make the
+        // status refresh unbounded. An unfinished census must remain unknown.
+        for (let page = 1; page <= ACTIVE_RUN_PAGE_LIMIT; page += 1) {
+          const runs = await github(
+            `/repos/${repo}/actions/runs?status=${status}&per_page=100${page > 1 ? `&page=${page}` : ""}`,
+            { fresh: attempt > 0 },
+          ).catch((error) => {
+            errors.push(statusTelemetryError("active_runs_unavailable", error));
+            return undefined;
+          });
+          if (runs === undefined) return workflowRuns;
+          if (!Array.isArray(runs?.workflow_runs) || runs.workflow_runs.length > 100) break;
+          const totalCount = runs.total_count;
+          if (totalCount !== undefined) {
+            if (!Number.isSafeInteger(totalCount) || totalCount < 0) break;
+            if (expectedTotalCount !== null && totalCount !== expectedTotalCount) {
+              changedDuringRead = true;
+              break;
+            }
+            expectedTotalCount = totalCount;
+          }
+          workflowRuns.push(...runs.workflow_runs);
+          if (uniqueWorkflowRuns(workflowRuns).length !== workflowRuns.length) {
+            changedDuringRead = true;
+            break;
+          }
+          if (expectedTotalCount !== null && workflowRuns.length >= expectedTotalCount) {
+            complete = workflowRuns.length === expectedTotalCount;
+            changedDuringRead = !complete;
+            break;
+          }
+          if (runs.workflow_runs.length < 100) {
+            complete = expectedTotalCount === null;
+            changedDuringRead = !complete;
+            break;
+          }
+        }
+        // Actions can change between pages, or even between its count and rows.
+        // Rebuild that census once from fresh reads; never combine generations.
+        if (changedDuringRead && attempt === 0) continue;
+        if (!complete) errors.push("active_runs_unavailable:census_incomplete");
+        return workflowRuns;
+      }
     }),
   );
   return uniqueWorkflowRuns(pages.flat());
@@ -8235,7 +8566,19 @@ function uniqueWorkflowRuns(runs) {
       run?.id ??
       run?.html_url ??
       `${run?.name || ""}:${run?.display_title || ""}:${run?.created_at || ""}`;
-    if (key) seen.set(String(key), run);
+    if (!key) continue;
+    const previous = seen.get(String(key));
+    if (previous) {
+      // A rerun keeps its ID but advances its attempt. Within that generation,
+      // prefer the last update, then terminal state for equal-second timestamps.
+      // Remaining ties retain the first feed's whole observation.
+      const newer =
+        (run?.run_attempt || 0) - (previous?.run_attempt || 0) ||
+        (Date.parse(run?.updated_at || "") || 0) - (Date.parse(previous?.updated_at || "") || 0) ||
+        Number(run?.status === "completed") - Number(previous?.status === "completed");
+      if (newer <= 0) continue;
+    }
+    seen.set(String(key), run);
   }
   return [...seen.values()];
 }
@@ -8360,10 +8703,20 @@ async function attachCiStatus(
   try {
     const pr = await github(`/repos/${item.repository}/pulls/${item.item_number}`);
     if (!pr?.head?.sha) return;
-    const checks = await github(
-      `/repos/${item.repository}/commits/${pr.head.sha}/check-runs?per_page=100`,
+    // A head can carry more than one page of check runs (openclaw PRs often
+    // have 100-300), so read every page before counting failures.
+    const checksPath = (page: number) =>
+      `/repos/${item.repository}/commits/${pr.head.sha}/check-runs?per_page=100&page=${page}`;
+    const first = await github(checksPath(1));
+    const total = Number(first?.total_count);
+    const pageCount =
+      Number.isSafeInteger(total) && total > 100 ? Math.min(10, Math.ceil(total / 100)) : 1;
+    const rest = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, index) => github(checksPath(index + 2))),
     );
-    const runs = Array.isArray(checks?.check_runs) ? checks.check_runs : [];
+    const runs = [first, ...rest].flatMap((page) =>
+      Array.isArray(page?.check_runs) ? page.check_runs : [],
+    );
     const failing = runs.filter(
       (check) =>
         check.status === "completed" &&
@@ -8887,6 +9240,21 @@ function cachedStatusSnapshotKey(publicBayScope) {
   }`;
 }
 
+function statusPublicationTime(body: string, now: number): number | null {
+  try {
+    const snapshot = JSON.parse(body);
+    const at = Date.parse(snapshot?.generated_at);
+    return snapshot?.schema_version === 1 &&
+      snapshot.public_projection_complete === true &&
+      Number.isFinite(at) &&
+      at <= now + 60_000
+      ? at
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function writeCachedStatusSnapshot(store, body, publicBayScope) {
   await writeStatusStoreText(store, cachedStatusSnapshotKey(publicBayScope), body);
 }
@@ -9044,11 +9412,11 @@ function statusStoreRequest(key, method = "GET") {
 
 function createGithubJsonCache(env): GithubJsonReader {
   const cache = new Map<string, ReturnType<typeof githubJson>>();
-  return (path: string) => {
+  return (path: string, options) => {
     statusCollections.get(env)?.check();
     const key = String(path);
     let request = cache.get(key);
-    if (!request) {
+    if (!request || options?.fresh) {
       request = statusOperation(env, "github", () => githubJson(env, key));
       cache.set(key, request);
     }
@@ -9057,7 +9425,7 @@ function createGithubJsonCache(env): GithubJsonReader {
 }
 
 async function githubJson(env, path) {
-  const token = await statusOperation(env, "github_auth", () => githubAuthToken(env));
+  const scope = githubReadScope(env, path);
   const key = githubEtagCacheKey({
     credentialPool: env.GITHUB_TOKEN ? "repository_actions" : "target_app",
     route: path,
@@ -9076,7 +9444,9 @@ async function githubJson(env, path) {
       cachedEntry = null;
     }
   }
-  let response = await githubJsonResponse(env, path, token, String(cachedEntry?.etag || ""));
+  const read = (etag: string) =>
+    githubRequestWithAuth(env, scope, (token) => githubJsonResponse(env, path, token, etag));
+  let response = await read(String(cachedEntry?.etag || ""));
   if (response.status === 304 && etagBrokerEnabled && requestBody && cachedEntry) {
     try {
       const confirmed = await githubEtagCachePost(env, "confirm", {
@@ -9098,10 +9468,19 @@ async function githubJson(env, path) {
     } catch {
       // The final guard may use a 304, but it never consumes an unconfirmed body.
     }
-    response = await githubJsonResponse(env, path, token, "");
+    response = await read("");
   }
-  if (!response.ok) throw new Error(`GitHub ${response.status} for ${path}`);
-  const body = await response.text();
+  if (!response.ok) {
+    throw new GitHubRequestError(
+      `GitHub ${response.status} for ${path}`,
+      response.status,
+      false,
+      githubResponseRateLimited(response, ""),
+    );
+  }
+  const body = await response
+    .text()
+    .catch((error) => githubTransportFailure(env, error, githubResponseSignals.get(response)));
   if (etagBrokerEnabled && requestBody) {
     const etag = response.headers.get("etag") || "";
     const bodyBytes = new TextEncoder().encode(body).byteLength;
@@ -9116,36 +9495,61 @@ async function githubJson(env, path) {
 
 export const githubJsonForTest = githubJson;
 
-function githubJsonResponse(env, path, token: string, ifNoneMatch: string) {
-  return fetch(githubApiUrl(env, path), {
-    signal: statusRequestSignal(env, AbortSignal.timeout(GITHUB_TIMEOUT_MS)),
-    headers: {
-      Accept: "application/vnd.github+json",
-      "User-Agent": "openclaw-clawsweeper-status",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(ifNoneMatch ? { "If-None-Match": ifNoneMatch } : {}),
-    },
-  });
+async function githubJsonResponse(env, path, token: string, ifNoneMatch: string) {
+  const url = githubApiUrl(env, path);
+  const signal = statusRequestSignal(env, AbortSignal.timeout(GITHUB_TIMEOUT_MS));
+  try {
+    const response = await fetch(url, {
+      signal,
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "openclaw-clawsweeper-status",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(ifNoneMatch ? { "If-None-Match": ifNoneMatch } : {}),
+      },
+    });
+    githubResponseSignals.set(response, signal);
+    return response;
+  } catch (error) {
+    return githubTransportFailure(env, error, signal);
+  }
+}
+
+function githubTransportFailure(env, error: unknown, signal?: AbortSignal): never {
+  if (statusCollections.get(env)?.controller.signal.aborted) throw error;
+  throw new GitHubRequestError("GitHub request failed", undefined, signal?.aborted === true);
 }
 
 async function githubEtagCachePost(env, operation: "lookup" | "store" | "confirm", body) {
-  return statusOperation(env, "github", async () => {
-    const response = await githubEtagCacheRequest(
-      env,
-      `/github-etag-cache/${operation}`,
-      JSON.stringify(body),
+  const controller = new AbortController();
+  try {
+    // This cache is advisory. Its own request/body deadline must leave time
+    // for the authoritative GitHub read and the rest of the status snapshot.
+    return await withTimeout(
+      statusOperation(env, "github", async () => {
+        const response = await githubEtagCacheRequest(
+          env,
+          `/github-etag-cache/${operation}`,
+          JSON.stringify(body),
+          controller.signal,
+        );
+        const result = objectValue(await response.json().catch(() => null));
+        if (!response.ok) throw new Error(String(result.error || "GitHub ETag cache unavailable"));
+        return result;
+      }),
+      GITHUB_ETAG_CACHE_TIMEOUT_MS,
+      "GitHub ETag cache",
     );
-    const result = objectValue(await response.json().catch(() => null));
-    if (!response.ok) throw new Error(String(result.error || "GitHub ETag cache unavailable"));
-    return result;
-  });
+  } finally {
+    controller.abort();
+  }
 }
 
 function parseGithubJsonBody(body: string, path: string) {
   try {
     return JSON.parse(body);
   } catch {
-    throw new Error(`GitHub returned invalid JSON for ${path}`);
+    throw new SyntaxError(`GitHub returned invalid JSON for ${path}`);
   }
 }
 
@@ -9155,20 +9559,35 @@ async function sha256Utf8(value: string): Promise<string> {
 }
 
 async function githubGraphql(env, query, variables) {
-  const token = await statusOperation(env, "github_auth", () => githubAuthToken(env));
-  if (!token) throw new Error("GitHub auth is required for GraphQL");
-  const response = await fetch(githubApiUrl(env, "/graphql"), {
-    method: "POST",
-    signal: statusRequestSignal(env, AbortSignal.timeout(OPTIONAL_SECTION_TIMEOUT_MS)),
-    headers: {
-      Accept: "application/vnd.github+json",
-      "Content-Type": "application/json",
-      "User-Agent": "openclaw-clawsweeper-status",
-      Authorization: `Bearer ${token}`,
+  const response = await githubRequestWithAuth(
+    env,
+    {
+      repos: [`${variables.owner}/${variables.name}`],
+      permissions: { issues: "read", pull_requests: "read" },
     },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!response.ok) throw new Error(`GitHub GraphQL ${response.status}`);
+    (token) => {
+      if (!token) throw new Error("GitHub auth is required for GraphQL");
+      return fetch(githubApiUrl(env, "/graphql"), {
+        method: "POST",
+        signal: statusRequestSignal(env, AbortSignal.timeout(OPTIONAL_SECTION_TIMEOUT_MS)),
+        headers: {
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "User-Agent": "openclaw-clawsweeper-status",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ query, variables }),
+      });
+    },
+  );
+  if (!response.ok) {
+    throw new GitHubRequestError(
+      `GitHub GraphQL ${response.status}`,
+      response.status,
+      false,
+      githubResponseRateLimited(response, ""),
+    );
+  }
   const payload = await response.json();
   if (Array.isArray(payload.errors) && payload.errors.length) {
     throw new Error(payload.errors.map((error) => error.message).join("; "));
@@ -9176,72 +9595,107 @@ async function githubGraphql(env, query, variables) {
   return payload.data;
 }
 
+export const githubGraphqlForTest = githubGraphql;
+
+async function githubRequestWithAuth(env, scope, request: (token: string) => Promise<Response>) {
+  const tokenForScope = () =>
+    statusOperation(env, "github_auth", () => githubAuthToken(env, scope));
+  let token = await tokenForScope();
+  let response = await request(token);
+  if (response.status !== 401 || env.GITHUB_TOKEN || !token) return response;
+
+  // A delayed 401 must not evict a replacement minted by another request.
+  const evictRejectedToken = () => {
+    for (const [key, entry] of githubAppTokenCache) {
+      if (entry.token === token) githubAppTokenCache.delete(key);
+    }
+  };
+  evictRejectedToken();
+  await response.body?.cancel();
+  token = await tokenForScope();
+  response = await request(token);
+  if (response.status === 401) evictRejectedToken();
+  return response;
+}
+
 function hasGithubAuth(env) {
   return Boolean(env.GITHUB_TOKEN || githubAppCredentials(env));
 }
 
-async function githubAuthToken(env) {
+function githubReadScope(env, path: string) {
+  const match = /^\/repos\/([^/]+\/[^/]+)(?:\/([^/?]+))?/.exec(path);
+  if (match) {
+    const permission = /\/commits\/[^/]+\/check-runs(?:[/?]|$)/.test(path)
+      ? "checks"
+      : {
+          actions: "actions",
+          contents: "contents",
+          pulls: "pull_requests",
+          issues: "issues",
+          labels: "issues",
+          commits: "contents",
+        }[match[2]] || "metadata";
+    return { repos: [match[1]], permissions: { [permission]: "read" } };
+  }
+  const query = new URL(path, "https://api.github.com").searchParams.get("q") || "";
+  // Search builders put scope first; quoted label text must not widen it.
+  const repository = /^repo:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)(?=\s|$)/.exec(query)?.[1];
+  const itemKind = /^repo:\S+\s+is:(pr|issue)(?=\s|$)/.exec(query)?.[1];
+  const permissions =
+    itemKind === "pr"
+      ? { pull_requests: "read" }
+      : itemKind === "issue"
+        ? { issues: "read" }
+        : { issues: "read", pull_requests: "read" };
+  return { repos: repository ? [repository] : triageTargetRepos(env), permissions };
+}
+
+async function githubAuthToken(env, scope) {
   if (env.GITHUB_TOKEN) return String(env.GITHUB_TOKEN);
   const credentials = githubAppCredentials(env);
   if (!credentials) return "";
 
   const now = Date.now();
-  const repos = triageTargetRepos(env);
-  const cacheKey = [
+  const owners = new Set(scope.repos.map((repo: string) => repo.split("/")[0].toLowerCase()));
+  if (owners.size !== 1) throw new Error("GitHub App token repositories must share an owner");
+  const request = githubAppTokenRequest(scope.repos.map(repoName), scope.permissions);
+  const cacheKey = JSON.stringify([
     credentials.issuer,
-    credentials.installationId || repos[0] || "",
-    repos.join(","),
-  ].join("|");
-  if (
-    githubAppTokenCache?.key === cacheKey &&
-    githubAppTokenCache.expiresAtMs - GITHUB_APP_TOKEN_REFRESH_SKEW_MS > now
-  ) {
-    return githubAppTokenCache.token;
+    credentials.installationId,
+    owners.values().next().value,
+    githubApiUrl(env, "/"),
+    request,
+  ]);
+  for (const [key, entry] of githubAppTokenCache) {
+    if (entry.expiresAtMs - GITHUB_APP_TOKEN_REFRESH_SKEW_MS <= now)
+      githubAppTokenCache.delete(key);
   }
-  if (githubAppTokenCache?.key === cacheKey && githubAppTokenCache.promise) {
-    return githubAppTokenCache.promise;
-  }
+  const cached = githubAppTokenCache.get(cacheKey);
+  if (cached) return cached.token;
 
-  const promise = createGithubAppInstallationToken(env, credentials, repos)
+  const mints = statusCollections.get(env)?.githubAppTokenMints;
+  const inFlight = mints?.get(cacheKey);
+  if (inFlight) return inFlight;
+  const promise = createGithubAppInstallationToken(env, credentials, scope.repos, request)
     .then((result) => {
-      githubAppTokenCache = {
-        key: cacheKey,
-        token: result.token,
-        expiresAtMs: result.expiresAtMs,
-      };
+      githubAppTokenCache.set(cacheKey, result);
       return result.token;
     })
-    .catch((error) => {
-      githubAppTokenCache = null;
-      throw error;
-    });
-  githubAppTokenCache = {
-    key: cacheKey,
-    token: "",
-    expiresAtMs: 0,
-    promise,
-  };
+    .finally(() => mints?.delete(cacheKey));
+  mints?.set(cacheKey, promise);
   return promise;
 }
 
-async function createGithubAppInstallationToken(env, credentials, repos) {
+async function createGithubAppInstallationToken(env, credentials, repos, request) {
   const appJwt = await signGithubAppJwt(credentials.issuer, credentials.privateKey);
   const installationId =
-    credentials.installationId || (await githubAppInstallationId(appJwt, repos[0], env));
+    credentials.installationId || (await typedGithubAppInstallationId(appJwt, repos[0], env));
   const payload = await githubAppJson(
     `/app/installations/${installationId}/access_tokens`,
     appJwt,
     {
       method: "POST",
-      body: JSON.stringify({
-        permissions: {
-          actions: "read",
-          checks: "read",
-          contents: "read",
-          issues: "read",
-          pull_requests: "read",
-        },
-      }),
+      body: JSON.stringify(request),
       errorLabel: "GitHub App token",
     },
     env,
@@ -9372,7 +9826,7 @@ function isCodexWorkflowFallback(run) {
   ) {
     return false;
   }
-  return /review clawsweeper items|review hot (?:clawsweeper items|target repo)|review target repo|review event items?|retry failed codex reviews|commit review|repair cluster|automerge repair|issue implementation|assist\b/i.test(
+  return /review clawsweeper items|review hot (?:clawsweeper items|target repo)|review target repo|review event items?|review exact item|review scheduled (?:hot|normal) item|retry failed codex reviews|commit review|repair cluster|automerge repair|issue implementation|assist\b/i.test(
     name,
   );
 }

@@ -39,6 +39,23 @@ For egress field interpretation, use
 [GitHub publication egress telemetry](github-egress-telemetry.md). For other
 fields, use [Live dashboard](live-dashboard.md).
 
+The publication endpoint's `batch.reason_counts` groups the same retained events
+by outcome (`superseded`, `retryable`, `permanent`) and validated reason code.
+Each outcome includes `unrecorded` for historical or synthesized events without
+a recorded reason. Its reason counts sum to that outcome's count. A null
+breakdown means the breakdown is unavailable; existing outcome totals remain
+valid. These are publication outcome events, not unique reviews or unresolved
+targets. Free-text errors and fingerprints are never public reason labels.
+
+The optional queue `warning_evidence` field adds bounded, allowlisted public
+record evidence for `scanner_refused`, `review_retry_exhausted`, and
+`stale_revision`, plus observed repeated-claim counts/history. It has no new
+route or identifying query parameter. Source candidates are capped at 20 per
+class; public samples at 10, recent claim observations at five per target.
+Every fresh/cache/status projection rechecks repository eligibility and closed
+fields. Missing or malformed evidence is null without changing valid aggregate
+counts. See [agent metrics](agent-performance-metrics.md) for meanings and limits.
+
 Public observer routes are projections, not private-store serializers. Internal
 Durable Object state may retain item keys, repository selectors, workflow/job
 metadata, failure details, run links, revision digests, and sampled records for
@@ -109,7 +126,11 @@ identities for incident investigation without storing raw failure text.
 
 The optional `review_runaway_health` object is a closed trailing-24-hour alert:
 `status` (`healthy`, `degraded`, or `unknown`), `reason`, `window_hours`,
-`threshold_reviews_per_day`, `runaway_items`, and `sample_item_keys`. Samples are
+`threshold_reviews_per_day`, `runaway_items`, and `sample_item_keys`. New snapshots
+also carry `counting_basis: "claimed_review_runs"`; older snapshots may omit it.
+Claims include cache hits, semantic no-ops, and failures before model execution,
+so this alert does not count model calls. Any other counting basis projects as
+`null`. Samples are
 at most five canonical `owner/repo#number` keys for repositories in
 `PUBLIC_BAY_REPOS`; private-repository runaways are counted but not named, and
 run, revision, and per-item review counts are not projected. A missing or

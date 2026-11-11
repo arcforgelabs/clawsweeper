@@ -1,3 +1,5 @@
+import { validatedLiveCoverage } from "./public-live-coverage.ts";
+import { PUBLICATION_TELEMETRY_REASONS } from "./exact-review-publication-reasons.ts";
 import { publicTimestamp as timestamp } from "./public-timestamp.ts";
 import {
   GITHUB_EGRESS_CLAIM_GENERATION_BUCKETS,
@@ -273,6 +275,15 @@ const REVIEW_COVERAGE_TOTAL_FIELDS = [
 ] as const;
 
 export function publicReviewCoverageProjection(value: unknown) {
+  return reviewCoverageProjection(value, false);
+}
+
+// Private candidates are provenance, not continued public visibility authority.
+export function privateReviewCoverageProjection(value: unknown) {
+  return reviewCoverageProjection(value, true);
+}
+
+function reviewCoverageProjection(value: unknown, identifyingBuildRead: boolean) {
   const source = objectValue(value);
   const totalsSource = objectValue(source?.totals);
   if (!source || source.ok !== true || !totalsSource) return null;
@@ -289,6 +300,15 @@ export function publicReviewCoverageProjection(value: unknown) {
   ) {
     return null;
   }
+  if (source.cohort === "live-open-identities-v1") {
+    const rich = validatedLiveCoverage(source, generatedAt, inventoryGeneratedAt, windowDays);
+    if (!rich) return null;
+    if (identifyingBuildRead) return { ...rich, scope: "authenticated-coverage-candidates" };
+    // Anonymous telemetry never returns identities, regardless of persisted
+    // visibility/age or identifying query parameters. No GitHub request fanout.
+    const { fleets: _privateFleets, ...aggregate } = rich;
+    return { ...aggregate, scope: "aggregate-only", count_scope: "fleet-inventory-aggregate" };
+  }
   const totals: Record<string, number | null> = {};
   for (const field of REVIEW_COVERAGE_TOTAL_FIELDS) {
     const parsed = count(totalsSource[field]);
@@ -300,13 +320,26 @@ export function publicReviewCoverageProjection(value: unknown) {
   const reviewable = totals.reviewable_records ?? 0;
   const reviewed = totals.reviewed_recent ?? 0;
   const expectedCoverage = reviewable ? Math.round((reviewed / reviewable) * 1000) / 10 : null;
-  if (reviewed > reviewable || coveragePercent !== expectedCoverage) return null;
+  if (
+    source.coverage_status !== undefined &&
+    !member(["complete", "unknown"], source.coverage_status)
+  )
+    return null;
+  const coverageStatus = source.coverage_status === "complete" ? "complete" : "unknown";
+  if (
+    reviewed > reviewable ||
+    (coverageStatus === "complete"
+      ? coveragePercent !== expectedCoverage || source.inventory_status !== "current"
+      : coveragePercent !== null)
+  )
+    return null;
   return {
     ok: true,
     generated_at: generatedAt,
     window_days: windowDays,
     inventory_generated_at: inventoryGeneratedAt,
     inventory_status: source.inventory_status,
+    coverage_status: coverageStatus,
     totals: { ...totals, coverage_percent: coveragePercent },
   };
 }
@@ -904,7 +937,11 @@ export function publicGithubEgressObservabilityProjection(value: unknown) {
   };
 }
 
-function publicationSource(value: unknown, outcomes: readonly string[]) {
+function publicationSource(
+  value: unknown,
+  outcomes: readonly string[],
+  reasonCodes?: Record<string, readonly string[]>,
+) {
   const source = objectValue(value);
   const countsSource = objectValue(source?.counts);
   if (!source || !countsSource || typeof source.complete !== "boolean") return null;
@@ -945,7 +982,39 @@ function publicationSource(value: unknown, outcomes: readonly string[]) {
   ) {
     return null;
   }
-  return { complete: source.complete, rows, latest_observed_at: latestObservedAt, counts, buckets };
+  let reasonCounts: Record<string, Record<string, number | null>> | null = null;
+  // Older snapshots still carry valid outcome totals. Their missing breakdown
+  // is unavailable, not zero and not a reason to discard the whole snapshot.
+  if (reasonCodes && source.reason_counts != null) {
+    const reasons = objectValue(source.reason_counts);
+    if (!source.complete || !reasons) return null;
+    reasonCounts = {};
+    for (const outcome of outcomes) {
+      const outcomeReasons = reasonCodes[outcome];
+      if (!outcomeReasons) return null;
+      const projected = nullableCountObject(
+        reasons[outcome],
+        [...outcomeReasons, "unrecorded"],
+        10_000,
+      );
+      if (
+        !projected ||
+        Object.values(projected).some((value) => value === null) ||
+        Object.values(projected).reduce<number>((total, value) => total + Number(value), 0) !==
+          counts[outcome]
+      )
+        return null;
+      reasonCounts[outcome] = projected;
+    }
+  }
+  return {
+    complete: source.complete,
+    rows,
+    latest_observed_at: latestObservedAt,
+    counts,
+    buckets,
+    ...(reasonCodes ? { reason_counts: reasonCounts } : {}),
+  };
 }
 
 export function publicRecentDurablePublicationEventsProjection(value: unknown) {
@@ -960,7 +1029,11 @@ export function publicRecentDurablePublicationEventsProjection(value: unknown) {
   const startAt = timestamp(window.start_at);
   const endAt = timestamp(window.end_at);
   const direct = publicationSource(source.direct, DIRECT_PUBLICATION_OUTCOMES);
-  const batch = publicationSource(source.batch, BATCH_PUBLICATION_OUTCOMES);
+  const batch = publicationSource(
+    source.batch,
+    BATCH_PUBLICATION_OUTCOMES,
+    PUBLICATION_TELEMETRY_REASONS,
+  );
   if (
     source.version !== 1 ||
     !capturedAt ||

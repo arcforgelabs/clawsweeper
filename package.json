@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clawsweeper",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -10,6 +10,7 @@
     "build:dashboard": "tsc -p tsconfig.dashboard.json",
     "build:node": "pnpm run build && pnpm run build:repair",
     "build:all": "pnpm run build && pnpm run build:repair && pnpm run build:dashboard",
+    "package:local": "pnpm run build:node && node scripts/stage-local-package.mjs",
     "plan": "node dist/clawsweeper.js plan",
     "reserve-review-lease": "node dist/clawsweeper.js reserve-review-lease",
     "review": "node dist/clawsweeper.js review",
@@ -24,6 +25,7 @@
     "reconcile": "node dist/clawsweeper.js reconcile",
     "status": "node dist/clawsweeper.js status",
     "local-review": "node dist/commit-sweeper.js local-review",
+    "review-authority:observe": "node scripts/review-authority-observer.mjs",
     "repair:containment-smoke": "node dist/repair/containment-preflight.js",
     "repair:comment-router": "node scripts/comment-router-runner.mjs",
     "repair:comment-webhook": "node dist/repair/comment-webhook.js",
@@ -31,6 +33,7 @@
     "repair:publish-main": "node dist/repair/publish-main.js",
     "repair:notify-maintainer-report": "node dist/repair/notify-maintainer-report.js",
     "repair:notify-github-activity": "node dist/repair/notify-github-activity.js",
+    "repair:github-scale-canary": "node dist/repair/github-scale-canary.js",
     "repair:exact-review-bundle": "node dist/repair/exact-review-bundle-cli.js",
     "repair:exact-review-queue-maintenance": "node dist/repair/exact-review-queue-maintenance.js",
     "repair:scheduled-review-enqueue": "node dist/repair/scheduled-review-enqueue.js",
@@ -43,8 +46,8 @@
     "repair:update-review-status": "node dist/repair/update-review-status.js",
     "workflow": "node dist/repair/workflow-utils.js",
     "target-fanout": "node dist/repair/target-fanout.js",
-    "dashboard:deploy": "npx wrangler@4.131.1 deploy --config dashboard/wrangler.toml",
-    "dashboard:dev": "npx wrangler@4.131.1 dev --config dashboard/wrangler.toml",
+    "dashboard:deploy": "wrangler deploy --config dashboard/wrangler.toml",
+    "dashboard:dev": "wrangler dev --config dashboard/wrangler.toml",
     "dashboard:refresh-ci": "node scripts/dashboard-refresh-ci.mjs",
     "dashboard:smoke": "node scripts/dashboard-smoke.mjs",
     "test": "pnpm run build:all && pnpm run test:no-build",
@@ -83,21 +86,26 @@
     "crabbox:warmup": "crabbox warmup"
   },
   "dependencies": {
-    "yaml": "^2.9.0",
+    "markdown-it": "^15.0.3",
+    "pako": "3.0.2",
+    "yaml": "^2.9.1",
     "yauzl": "3.4.0"
   },
   "devDependencies": {
-    "@types/node": "^24.13.4",
+    "@types/node": "^24.19.2",
     "@types/yauzl": "3.4.0",
-    "markdown-it": "^15.0.2",
-    "oxfmt": "^0.67.0",
-    "oxlint": "^1.82.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "playwright-core": "^1.63.0",
-    "typescript": "^7.0.2"
+    "es-module-lexer": "3.0.4",
+    "esbuild": "0.28.1",
+    "miniflare": "5.20261103.0-beta",
+    "oxfmt": "^0.76.0",
+    "oxlint": "^1.90.0",
+    "oxlint-tsgolint": "7.0.2005",
+    "playwright-core": "^1.64.1",
+    "typescript": "^7.0.2",
+    "wrangler": "4.157.0"
   },
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@12.4.1"
+  "packageManager": "pnpm@12.15.0"
 }

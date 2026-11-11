@@ -18,6 +18,14 @@ ClawSweeper has two target-repository paths:
 - conservative generic fallbacks for exact event/manual reviews of configured
   owner inventories such as `openclaw/*` and `steipete/*`
 
+These paths govern hosted admission. Offline committed-range review
+(`local-review` and `review --local-range`) also accepts unlisted/private targets
+without changing this configuration or hosted inventory. It selects the local
+identity from `--target-repo`, the existing environment selectors, or the
+checkout's GitHub origin. Known targets keep their full profile guidance;
+unlisted targets use the checkout's own instructions. Every local profile has
+empty close rules. See [local branch review](commit-sweeper.md).
+
 `openclaw/openclaw` remains a built-in profile because it has broader
 auto-close policy. Every other configured profile declares its own issue and PR
 close rules in `apply_close_rules`; do not infer those rules from whether the
@@ -40,6 +48,15 @@ guidance.
 `openclaw/clawsweeper`, ClawHub, and generic targets follow their own release-note
 policies; being a non-core target does not grant contributors or workers
 permission to edit release-owned files.
+
+All profiles share the hidden-payload security guard in
+`src/repair/security-signals.ts`. It checks the raw item body and discussion
+before prompt compaction, inspecting rendered HTML comments for remote shell
+substitution, download-to-shell pipelines, or encoded environment dumps. Visible
+fenced and inline code examples are excluded. A signal becomes a typed security
+review requiring human moderation, P1 (or an existing P0), and `impact:security`;
+it blocks every automatic close reason. Apply also checks current source before
+closing, including paired closes and older proposals without a recorded signal.
 
 OpenClaw’s generated locale PRs are publisher-owned. Automatic apply and repair
 close paths leave PRs open when live GitHub metadata identifies
@@ -146,8 +163,7 @@ without a TypeScript change. It is intentionally narrow:
 - denied repositories are rejected
 - scheduled fanout is public-only unless a private state publication path exists
 - auto-close policy comes from that owner fallback
-- `live_test` configuration and its post-review executor are retired; inline
-  review proof uses the current lease-scoped proof capabilities instead
+- `live_test` configuration and its post-review executor are retired
 - generic `openclaw/*` issues can auto-close only for
   `implemented_on_main`; PRs can auto-close for `implemented_on_main` or
   age-gated `mostly_implemented_on_main`
@@ -162,12 +178,12 @@ workflow and GitHub App installation.
 1. Install the ClawSweeper GitHub App on the target repository.
 2. Add or merge the target dispatcher from
    [`docs/target-dispatcher.md`](target-dispatcher.md).
-3. Ensure the target repo can read the org or repo
-   `CLAWSWEEPER_APP_PRIVATE_KEY` secret.
+3. Verify the App receives Issues, Pull requests, and Issue comments webhooks.
+   The target workflow uses OIDC and needs no ClawSweeper secret.
 4. Open, edit, or comment on a target issue/PR and confirm a dispatcher run
    appears in the target repo.
-5. Confirm the receiver run appears in
-   `https://github.com/openclaw/clawsweeper/actions`.
+5. Confirm direct Worker intake succeeds and the queued review appears in
+   `https://github.com/openclaw/clawsweeper/actions`; no relay run is expected.
 6. Confirm the target item gets one durable ClawSweeper review comment.
 
 Add a `config/target-repositories.json` entry when a repository needs explicit
@@ -194,6 +210,6 @@ Batch rollout should use target fanout:
   close policy
 
 If a target dispatch reaches ClawSweeper but receiver token creation fails, the
-App is usually not installed on that target repo. If the target workflow skips
-before dispatch, the target repo usually cannot access
-`CLAWSWEEPER_APP_PRIVATE_KEY`.
+App is usually not installed on that target repo. If the target workflow warns before intake, check its OIDC permission,
+canonical workflow filename, and default-branch ref. The independent App webhook
+route remains enabled; see [failure semantics](target-dispatcher.md#failure-semantics-and-legacy-receivers).

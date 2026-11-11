@@ -5,17 +5,45 @@ import {
   PR_AUTO_CLOSE_EXEMPT_LABELS,
   STALLED_UNPROVEN_PROOF_STATUSES,
 } from "./clawsweeper-policy.js";
-import type { CloseReason, Item, PullRequestLiveActivity } from "./clawsweeper-types.js";
+import type {
+  ApplyCloseGuardBlock,
+  CloseReason,
+  Item,
+  PullRequestLiveActivity,
+} from "./clawsweeper-types.js";
 import { isMaintainerAuthorAssociation, normalizeLabelName } from "./clawsweeper-item-policy.js";
 import { quoteGitHubSearchTerm } from "./clawsweeper-related-context.js";
 import { asRecord, login, nonBlankStringOrUndefined } from "./value-coerce.js";
 import { isOlderThanDays } from "./iso-time.js";
 import { reportReviewDecision } from "./report-review-decision.js";
+import { githubHumanContentEditTimes } from "./github-content-edits.js";
+import { readCommitChecks } from "./github-commit-checks.js";
 
 export function maintainerAssociatedEntries(entries: readonly unknown[]): unknown[] {
   return entries.filter((entry) =>
     isMaintainerAuthorAssociation(asRecord(entry).author_association),
   );
+}
+
+export function recentHumanActivityBlockReason(
+  entries: readonly unknown[],
+  days: number,
+  now = Date.now(),
+): string | null {
+  for (const entry of entries) {
+    const record = asRecord(entry);
+    const actor = asRecord(record.user ?? record.actor);
+    if (actor.type === "Bot") continue;
+    // Creation belongs to the author; edits require their own attributed history.
+    if (!login(actor)) return "PR human activity identity is unavailable";
+    const timestamp = Date.parse(
+      nonBlankStringOrUndefined(record.submitted_at ?? record.createdAt ?? record.created_at) ?? "",
+    );
+    if (!Number.isFinite(timestamp) || timestamp > now || now - timestamp <= days * DAY_MS) {
+      return `PR has human comment, review, or edit activity within the last ${days} days`;
+    }
+  }
+  return null;
 }
 
 export function lowSignalUnmergeablePrConflictBlockReason(pullValue: unknown): string | null {
@@ -136,17 +164,22 @@ export function lowSignalUnmergeablePrAuthorActivityBlockReason(options: {
   return null;
 }
 
-export function issueRecentHumanCommentBlockReasonFromComments(
+export function issueRecentHumanCommentBlockFromComments(
   comments: readonly unknown[],
   days: number,
   now = Date.now(),
-): string | null {
+): ApplyCloseGuardBlock | null {
   for (const comment of comments) {
     const record = asRecord(comment);
     if (asRecord(record.user).type === "Bot") continue;
     const createdAt = typeof record.created_at === "string" ? record.created_at : "";
     if (!isOlderThanDays(createdAt, days, now)) {
-      return `issue has a non-bot comment within the last ${days} days`;
+      return {
+        reason: `issue has a non-bot comment within the last ${days} days`,
+        ...(Number.isFinite(Date.parse(createdAt)) && asRecord(record.user).type === "User"
+          ? { closePolicyHoldVerified: true as const }
+          : {}),
+      };
     }
   }
   return null;
@@ -238,19 +271,24 @@ export type PullRequestHeadActivityReader = (
 ) => Pick<PullRequestLiveActivity, "headSha" | "headActivityAtMs">;
 
 export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardReads) {
-  function issueRecentHumanCommentBlockReason(number: number, days: number): string | null {
-    return issueRecentHumanCommentBlockReasonFromComments(
+  function issueRecentHumanCommentBlock(number: number, days: number): ApplyCloseGuardBlock | null {
+    return issueRecentHumanCommentBlockFromComments(
       ghPaged<unknown>(`repos/${targetRepo()}/issues/${number}/comments`),
       days,
     );
   }
-  function issueRecentHumanCommentBlockReasonSafe(number: number, days: number): string | null {
+  function issueRecentHumanCommentBlockSafe(
+    number: number,
+    days: number,
+  ): ApplyCloseGuardBlock | null {
     try {
-      return issueRecentHumanCommentBlockReason(number, days);
+      return issueRecentHumanCommentBlock(number, days);
     } catch (error) {
-      return `issue comment activity check failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      return {
+        reason: `issue comment activity check failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
     }
   }
   function pullRequestHumanEngagementBlockReason(
@@ -260,6 +298,7 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
       requestedReviewers?: unknown[];
       requestedTeams?: unknown[];
     },
+    inactiveDays?: number,
   ): string | null {
     const issue = known
       ? { assignees: known.assignees }
@@ -286,24 +325,122 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
       return "requested reviewers or teams indicate active review signal";
     }
 
-    const maintainerComments = maintainerAssociatedEntries(
-      ghPaged<unknown>(`repos/${targetRepo()}/issues/${number}/comments`),
-    );
+    const comments = ghPaged<unknown>(`repos/${targetRepo()}/issues/${number}/comments`);
+    const maintainerComments = maintainerAssociatedEntries(comments);
     if (maintainerComments.length > 0)
       return "maintainer issue comment blocks inactivity auto-close";
 
-    const maintainerReviews = maintainerAssociatedEntries(
-      ghPaged<unknown>(`repos/${targetRepo()}/pulls/${number}/reviews`),
-    );
+    const reviews = ghPaged<unknown>(`repos/${targetRepo()}/pulls/${number}/reviews`);
+    const maintainerReviews = maintainerAssociatedEntries(reviews);
     if (maintainerReviews.length > 0) return "maintainer PR review blocks inactivity auto-close";
 
-    const maintainerInlineComments = maintainerAssociatedEntries(
-      ghPaged<unknown>(`repos/${targetRepo()}/pulls/${number}/comments`),
-    );
+    const inlineComments = ghPaged<unknown>(`repos/${targetRepo()}/pulls/${number}/comments`);
+    const maintainerInlineComments = maintainerAssociatedEntries(inlineComments);
     if (maintainerInlineComments.length > 0) {
       return "maintainer inline review comment blocks inactivity auto-close";
     }
+    if (inactiveDays !== undefined) {
+      const block = recentHumanActivityBlockReason(
+        [...comments, ...reviews, ...inlineComments],
+        inactiveDays,
+      );
+      if (block) return block;
+      const [owner, name] = targetRepo().split("/");
+      const response = asRecord(
+        ghJson<unknown>([
+          "api",
+          "graphql",
+          "-f",
+          "query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id lastEditedAt}}}",
+          "-f",
+          `owner=${owner}`,
+          "-f",
+          `name=${name}`,
+          "-F",
+          `number=${number}`,
+        ]),
+      );
+      const edited = asRecord(asRecord(asRecord(response.data).repository).pullRequest);
+      if (!("lastEditedAt" in edited)) return "PR body edit activity is unavailable";
+      // Reviews lack REST edit metadata. Bot content also needs history when its
+      // timestamps match: a human can edit a receipt within the creation second.
+      const needsHistory = (value: unknown): boolean => {
+        const record = asRecord(value);
+        const actor = asRecord(record.user);
+        return (
+          actor.type === "Bot" ||
+          (login(actor) ?? "").endsWith("[bot]") ||
+          record.updated_at !== record.created_at
+        );
+      };
+      const ids = [
+        ...(edited.lastEditedAt === null ? [] : [nonBlankStringOrUndefined(edited.id) ?? ""]),
+        ...[
+          ...comments.filter(needsHistory),
+          ...reviews,
+          ...inlineComments.filter(needsHistory),
+        ].map((entry) => nonBlankStringOrUndefined(asRecord(entry).node_id) ?? ""),
+      ];
+      try {
+        if (
+          githubHumanContentEditTimes(ghJson, ids).some(
+            (at) => Date.now() - at <= inactiveDays * DAY_MS,
+          )
+        ) {
+          return `PR has human edit activity within the last ${inactiveDays} days`;
+        }
+      } catch (error) {
+        return `PR attributed edit activity is unavailable: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
     return null;
+  }
+  // Only force-push events matter here. The REST timeline returns every
+  // event (megabytes on a busy PR), so read just this type over GraphQL.
+  function headRefForcePushedEvents(number: number): unknown[] {
+    const [owner, name] = targetRepo().split("/");
+    const events: unknown[] = [];
+    let before: string | null = null;
+    for (let page = 0; page < 10; page += 1) {
+      const connection = asRecord(
+        asRecord(
+          asRecord(
+            asRecord(
+              ghJson<unknown>([
+                "api",
+                "graphql",
+                "-f",
+                `owner=${owner}`,
+                "-f",
+                `name=${name}`,
+                "-F",
+                `number=${number}`,
+                ...(before ? ["-f", `before=${before}`] : []),
+                "-f",
+                "query=query($owner:String!,$name:String!,$number:Int!,$before:String){repository(owner:$owner,name:$name){pullRequest(number:$number){timelineItems(itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT],last:100,before:$before){nodes{...on HeadRefForcePushedEvent{createdAt afterCommit{oid}}} pageInfo{hasPreviousPage startCursor}}}}}",
+              ]),
+            ).data,
+          ).repository,
+        ).pullRequest,
+      ).timelineItems;
+      const connectionRecord = asRecord(connection);
+      if (!Array.isArray(connectionRecord.nodes)) {
+        throw new Error(`force-push timeline unavailable for #${number}`);
+      }
+      for (const node of connectionRecord.nodes) {
+        const record = asRecord(node);
+        events.push({
+          event: "head_ref_force_pushed",
+          commit_id: asRecord(record.afterCommit).oid,
+          created_at: record.createdAt,
+        });
+      }
+      const pageInfo = asRecord(connectionRecord.pageInfo);
+      if (pageInfo.hasPreviousPage !== true) return events;
+      before = nonBlankStringOrUndefined(pageInfo.startCursor) ?? null;
+      if (!before) break;
+    }
+    throw new Error(`force-push timeline for #${number} exceeds the read bound`);
   }
   function pullRequestHeadActivity(
     number: number,
@@ -311,7 +448,7 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
       created_at?: string;
       head?: { ref?: string; repo?: { full_name?: string; id?: unknown }; sha?: string };
     },
-    timeline = ghPaged<unknown>(`repos/${targetRepo()}/issues/${number}/timeline`),
+    timeline: readonly unknown[] | null = null,
   ): Pick<PullRequestLiveActivity, "headSha" | "headActivityAtMs"> {
     const headSha = typeof pull.head?.sha === "string" ? pull.head.sha : "";
     let headActivityAtMs: number | null = null;
@@ -350,7 +487,7 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
           observe(record.created_at);
         }
       }
-      for (const event of timeline) {
+      for (const event of timeline ?? headRefForcePushedEvents(number)) {
         const record = asRecord(event);
         const commitId =
           nonBlankStringOrUndefined(record.commitId) ?? nonBlankStringOrUndefined(record.commit_id);
@@ -394,18 +531,20 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
       }
     };
     if (headSha) {
-      const combined = ghJson<{ state?: string; statuses?: unknown[] }>([
-        "api",
-        `repos/${targetRepo()}/commits/${headSha}/status`,
-      ]);
-      if (combined.state === "failure" || combined.state === "error") headChecksFailing = true;
-      for (const status of combined.statuses ?? []) observeStatusActivity(status);
-      const checks = ghJson<{ check_runs?: unknown[] }>([
-        "api",
-        `repos/${targetRepo()}/commits/${headSha}/check-runs?per_page=100`,
-      ]);
-      for (const run of checks.check_runs ?? []) {
-        const record = asRecord(run);
+      // Every check run counts: a recent run on a later page is still activity.
+      const checks = readCommitChecks({
+        repository: targetRepo(),
+        sha: headSha,
+        readPages: (paths) => paths.map((path) => ghJson<unknown>(["api", path])),
+      });
+      if (!checks.complete) {
+        throw new Error("current-head check runs and statuses are incomplete");
+      }
+      if (checks.combinedState === "failure" || checks.combinedState === "error") {
+        headChecksFailing = true;
+      }
+      for (const status of checks.statuses) observeStatusActivity(status);
+      for (const record of checks.checkRuns) {
         observeStatusActivity(record);
         if (
           typeof record.conclusion === "string" &&
@@ -469,8 +608,8 @@ export function createApplyGuardActivity({ ghJson, ghPaged, targetRepo }: GuardR
   }
 
   return {
-    issueRecentHumanCommentBlockReason,
-    issueRecentHumanCommentBlockReasonSafe,
+    issueRecentHumanCommentBlock,
+    issueRecentHumanCommentBlockSafe,
     pullRequestHumanEngagementBlockReason,
     pullRequestHeadActivity,
     pullRequestLiveActivity,

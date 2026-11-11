@@ -225,6 +225,7 @@ test("canonical next-step report round-trip preserves explicit intent and absent
     undefined,
     { kind: "none", text: "" },
     { kind: "required", text: "Owner approval." },
+    { kind: "maintainer", text: "Owner approval." },
   ] as const) {
     const report = evidenceReport([], "keep_open", nextStep);
     assert.deepEqual(readReviewRecord(report)?.decision.nextStep, nextStep);
@@ -238,7 +239,7 @@ test("canonical next-step report round-trip preserves explicit intent and absent
         publicSection(comment, "Before merge"),
         /Complete next step|Run a fresh ClawSweeper review/,
       );
-    if (nextStep?.kind === "required")
+    if (nextStep?.kind === "required" || nextStep?.kind === "maintainer")
       assert.match(publicSection(comment, "Before merge"), /Owner approval\./);
   }
 });
@@ -306,7 +307,6 @@ test("accepted labeled risk survives decision and report parsing without reopeni
           body: "Exercise the second workflow before deciding whether to accept its impact.",
           category: "fix_before_merge",
           recommended: true,
-          automergeInstruction: "",
         },
       ],
     },
@@ -434,7 +434,8 @@ test("explicit none leaves independent blockers, decision counts and low ratings
       metadata: { author_association: "NONE" },
       label: "Add real behavior proof",
     },
-    { decision: { maintainerDecision: decision }, label: "Decision needed" },
+    // The decision renders under its own heading; it is not a Before-merge item.
+    { decision: { maintainerDecision: decision }, label: "Decision needed", count: 0 },
     {
       decision: {
         prRating: {
@@ -466,7 +467,11 @@ test("explicit none leaves independent blockers, decision counts and low ratings
   });
   const comment = renderReviewCommentFromReport(report, "none");
   assert.match(publicSection(comment, "Before merge"), /Record the owner decision/);
-  assert.match(comment, /2 items remain/);
+  // The outstanding decision beside contributor work keeps the PR blocked but is
+  // not itself a remaining item.
+  assert.match(comment, /⛔ \*\*Blocked before merge - 1 item remains\*\*/);
+  assert.doesNotMatch(publicSection(comment, "Before merge"), /maintainer decision/i);
+  assert.match(comment, /## Decision needed/);
 });
 
 const dependencyEvidence = {

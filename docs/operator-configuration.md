@@ -45,3 +45,47 @@ here.
 page. It does not require every repository workflow secret or dashboard setting
 to be duplicated here. [Automation limits](limits.md) remains canonical for
 capacity and timing values.
+
+## GitHub App token scopes
+
+Dashboard REST reads mint a token for the requested repository and read permission
+(actions, checks, contents, issues, pull requests, or metadata). GraphQL title
+reads use the named repository with issues/pull-requests read. Issue searches use
+the query's explicit repositories and item kind (issues or pull requests); a query
+without repository qualifiers falls back to the configured triage repository set. Cache
+identity includes the App, installation/repository identity, normalized repository
+set, and permission set. Expired entries are discarded before minting.
+
+The dead-letter operator caches successful tokens per repository, batches GraphQL
+reads within that repository, and retains owner-wide setup-throttle suppression.
+It requests issues and pull-requests read only. An inaccessible repository
+must not cause a token for a different repository to be reused.
+
+Workflow and webhook token requests name their target, central, or state repository
+and request only their API permissions. Target publication tokens read contents;
+issue/PR permissions own comment, label, and closure writes. State-token callers
+pass an empty Actions grant except audit, which dispatches the state dashboard.
+The state-size-only reconcile caller omits both optional grants; the composite
+always requests metadata read so empty grants cannot inherit App permissions.
+The comment router enqueues through Worker HMAC, so its unused legacy central
+dispatch token is restricted to metadata read. The four metadata-only inventory/coverage
+mints in `target-fanout.yml` are intentionally owner-scoped: their first read is
+`GET /installation/repositories`, which discovers the repository set itself.
+They cannot select that unknown set before minting. No token requests workflows,
+checks write, secrets, members, organization administration, or security events.
+
+## Submission triage
+
+Preliminary intake reuses the existing repository secret `OPENAI_API_KEY` and
+is enabled by default in native OpenAI modes. The separate OpenClaw runner can
+also use that key. Private ClawRouter Codex routes keep upstream keys withheld;
+intake never forwards their private workload credentials. Without a native key,
+full review runs normally and preliminary intake is disabled.
+
+The default backend is `decisions`, using `gpt-6-luna`. Set the repository
+variable `CLAWSWEEPER_DECISION_MODEL` to override the intake model, or to `off`
+to disable intake. Unset and blank values use the default. Set
+`CLAWSWEEPER_INTAKE_BACKEND=responses` for deployments without Decisions access;
+the selected model must be supported by that API. There is no automatic retry
+on another backend. See [intake triage](intake-triage.md) for scope, budgets and
+label lifecycle.

@@ -36,7 +36,7 @@ pnpm run build
 pnpm run check
 ```
 
-Corepack reads the pinned `pnpm@12.4.1` version from `package.json`; do not
+Corepack reads the pinned `pnpm@12.15.0` version from `package.json`; do not
 replace it with an unpinned global pnpm command in canonical examples.
 
 Workflow-intake fixtures require Bash 4+ for `mapfile`. macOS `/bin/bash` 3.2 is
@@ -48,8 +48,27 @@ Use the narrowest meaningful validation for the changed surface first. For a
 docs-only change, run `git diff --check` and verify the changed links and
 commands. For code, test, workflow, queue, API, UI, package, or integration
 changes, follow `AGENTS.md`: satisfy the real-behavior proof contract and
-mandatory Codex review loop before opening even a draft PR or updating one.
+final committed whole-branch Codex review before publication or handoff, including
+opening even a draft PR, updating one, or a direct push where otherwise permitted.
+Early local review is optional; the final review and any required repeats remain
+mandatory before landing. This does not replace the separate current-head/body
+ClawSweeper, CI, security, proof, or explicit merge-approval gates.
 Only Martin may expressly approve an evidence-in-progress exception.
+
+Use the [shared AutoReview helper](https://github.com/openclaw/agent-skills/tree/main/skills/autoreview)
+from the clean final branch. Set `AUTOREVIEW` to its installed helper path and
+`review_base` to the verified full commit ID of the intended target branch:
+
+```bash
+python3 "$AUTOREVIEW" --engine codex --mode branch --base "$review_base" \
+  --max-priority P3 --prompt-file AGENTS.md --prompt-file CONTRIBUTING.md
+```
+
+Branch mode reviews merge-base(`review_base`, HEAD) through HEAD, excluding dirty
+work. Supply applicable scoped instructions and needed unchanged owner context
+through the helper's existing context options. Resolve findings and repeat the
+affected proof/review under `AGENTS.md`; a saved clean report or equal final tree
+does not certify changed inputs.
 
 Documentation-only changes should also classify new pages as active, proposed,
 compatibility-only, or historical. Active runbooks need a role owner, owning
@@ -79,9 +98,24 @@ command and environment, observed result, artifact or trace, and limits. Tests,
 CI, mocks, and clean review support the claim but do not replace proof of a
 changed runtime, workflow, queue, API, UI, package, or integration path.
 Redact tokens, private URLs, user data, and unrelated logs before posting
-evidence.
+evidence. Credential-free Team session entrypoints allowed by the PR review
+policy are optional provenance, not private-content publication: a PR authored
+by `roboclaw-bot`, or by a GitHub-verified `OWNER` or `MEMBER` of an
+`openclaw/*` repository, may retain `Work sessions` links under
+`https://team.openclaw.ai/chat/roboclaw/`, including login-protected entrypoints.
+Keep access controls unchanged; include no credentials, authentication-bearing
+URLs, or conversation contents. Proof must be publicly inspectable independently
+of these links. Collaborator status alone or a PR-body identity claim does not
+establish eligibility.
 
 ## Review Conversations Are Author-Owned
+
+The first automatic PR review waits for ten quiet minutes after observing the
+current head, title, body, and draft state. Further changes restart that window.
+After a completed review, pushes and edits do not start another review: finish
+the fixes and request `@clawsweeper re-review`. Failed or stale-source attempts
+continue through the queue. This includes maintainer-authored PRs opened from 2026-10-15 03:50
+UTC; older maintainer PRs still require an explicit initial request.
 
 Treat a ClawSweeper or maintainer result as the next-step checklist for the PR,
 not as a handoff.
@@ -93,9 +127,12 @@ not as a handoff.
    optional moves are not blockers by themselves.
 3. Put the updated proof and each finding's disposition or supporting evidence
    in the main PR body. Do not leave required proof only in a comment.
-4. If the branch head or PR body changed after the latest durable review, treat
+4. If the branch head or review-content body changed after the latest durable review, treat
    that review and any affected proof as stale. Rerun the affected proof and
    wait until the next review applies to the current head and body.
+   The canonical preflight reader excludes one valid advisory annotation from
+   review content; human text, proof, and outside whitespace remain material.
+   Metadata edits can still trigger raw event or concurrency guards.
 5. Request `@clawsweeper re-review` only after the branch, body, proof, and
    relevant checks are current. PR authors and users with repository write
    access may use `@clawsweeper re-review` or `@clawsweeper re-run`; plain
@@ -103,7 +140,11 @@ not as a handoff.
    directly.
 
 `status: ⏳ waiting on author` or `status: 📣 needs proof` means the next action
-belongs to the author. Let the normal queue finish after a current re-review;
+belongs to the author. `status: ⏳ waiting on maintainer` instead means only
+explicit maintainer approvals or product decisions remain; the PR is still
+blocked from merge, not approved. Legacy reviews without typed maintainer
+ownership need a fresh review rather than a prose-based relabel.
+Let the normal queue finish after a current re-review;
 repeated commands before the requested changes are present add noise rather
 than evidence.
 

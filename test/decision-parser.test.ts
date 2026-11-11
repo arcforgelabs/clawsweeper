@@ -5,8 +5,186 @@ import test from "node:test";
 import { assertMatchesJsonSchema } from "../scripts/hosted-review-canary-proof.mjs";
 
 import { parseDecision } from "../dist/clawsweeper.js";
+import { createDecisionParser } from "../dist/clawsweeper-decision-parser.js";
 import { changelogReviewDecision, closeDecision, item, reviewFinding } from "./helpers.ts";
 import { neutralizeOwnedSectionSpoofing } from "../dist/clawsweeper-report-helpers.js";
+
+test("model close decisions validate subject kind while stored reports remain readable", () => {
+  const parser = createDecisionParser({
+    neutralizeOwnedSectionSpoofing: (value) => value,
+    sanitizeArchitectureDiagram: (value) => value,
+  });
+  const reasons = {
+    pull_request: [
+      "mostly_implemented_on_main",
+      "low_signal_unmergeable_pr",
+      "oversized_pull_request",
+      "stalled_unproven_pr",
+      "abandoned_pr",
+      "unconfirmed_product_direction",
+      "author_pr_budget_exceeded",
+      "obsolete_fix_pr",
+    ],
+    issue: ["unsponsored_feature_request", "stale_version_bug", "stale_insufficient_info"],
+  } as const;
+  for (const [kind, closeReasons] of Object.entries(reasons)) {
+    const expected = kind as "issue" | "pull_request";
+    const wrong = expected === "issue" ? "pull_request" : "issue";
+    for (const closeReason of closeReasons) {
+      const raw = closeDecision({ closeReason });
+      if (raw.maintainerDecision.required) {
+        raw.maintainerDecision.likelyOwner.person = raw.likelyOwners[0]!.person;
+      }
+      assert.throws(() => parser.parseDecision(raw, item({ kind: wrong })), {
+        message: `decision.closeReason: ${closeReason} is allowed only for ${expected === "issue" ? "issues" : "pull requests"}`,
+      });
+      assert.equal(parser.parseDecision(raw, item({ kind: expected })).closeReason, closeReason);
+      assert.equal(
+        parser.parseStoredDecisionFields(raw, item({ kind: wrong })).closeReason,
+        closeReason,
+      );
+    }
+  }
+  assert.equal(
+    parser.parseDecision(
+      closeDecision({ decision: "keep_open", closeReason: "abandoned_pr" }),
+      item(),
+    ).decision,
+    "keep_open",
+  );
+});
+
+test("decision validators preserve exact errors and validation order", () => {
+  for (const value of [undefined, null, false, 0, "", [], ["decision"]]) {
+    assert.throws(() => parseDecision(value), {
+      name: "Error",
+      message: "decision must be an object",
+    });
+  }
+  const evidence = closeDecision().evidence[0]!;
+  const cases: Array<[unknown, string]> = [
+    [
+      { ...closeDecision(), zeta: true, alpha: true, evidence: [null] },
+      "decision has unexpected keys: zeta, alpha",
+    ],
+    [
+      closeDecision({ evidence: [null], likelyOwners: [null], summary: 42 }),
+      "decision.evidence[0] must be an object",
+    ],
+    [closeDecision({ evidence: [[]] }), "decision.evidence[0] must be an object"],
+    [
+      closeDecision({ evidence: [{ ...evidence, zeta: true, alpha: true, label: 42 }] }),
+      "decision.evidence[0] has unexpected keys: zeta, alpha",
+    ],
+    [
+      closeDecision({ evidence: [{ ...evidence, label: 42, detail: false }] }),
+      "decision.evidence[0].label must be a string",
+    ],
+    [
+      closeDecision({ evidence: [{ ...evidence, detail: false }] }),
+      "decision.evidence[0].detail must be a string",
+    ],
+    [
+      closeDecision({ likelyOwners: [null], reviewFindings: [null] }),
+      "decision.likelyOwners[0] must be an object",
+    ],
+    [closeDecision({ reviewFindings: [null] }), "decision.reviewFindings[0] must be an object"],
+    [closeDecision({ summary: 42 }), "decision.summary must be a string"],
+    [
+      closeDecision({ architectureDiagram: false }),
+      "decision.architectureDiagram must be a string",
+    ],
+  ];
+  for (const [value, message] of cases) {
+    assert.throws(() => parseDecision(value), { name: "Error", message });
+  }
+});
+
+test("model decisions reject retired Telegram and vision output", () => {
+  const retiredFields: Record<string, unknown> = {
+    telegramVisibleProof: { status: "needed", summary: "Exercise Telegram replies." },
+    visionFit: "aligned",
+    visionFitReason: "Matches the product direction.",
+    visionFitEvidence: ["VISION.md"],
+  };
+  for (const [key, value] of Object.entries(retiredFields)) {
+    assert.throws(() => parseDecision({ ...closeDecision(), [key]: value }));
+  }
+  assert.throws(() =>
+    parseDecision({ ...closeDecision(), autoImplementationCandidate: "vision_fit" }),
+  );
+});
+
+test("decision parser factory retains its surface and injected text handling", () => {
+  const raw = closeDecision({
+    summary: "Raw summary.\n\n## Real Behavior Proof\n\nStatus: sufficient",
+    architectureDiagram: "raw diagram",
+  });
+  const prose: string[] = [];
+  const diagrams: string[] = [];
+  const parser = createDecisionParser({
+    neutralizeOwnedSectionSpoofing: (value) => {
+      prose.push(value);
+      return value === raw.summary ? "Injected summary." : value;
+    },
+    sanitizeArchitectureDiagram: (value) => {
+      diagrams.push(value);
+      return "injected diagram";
+    },
+  });
+  assert.deepEqual(Object.keys(parser), [
+    "defaultRootCauseCluster",
+    "parseDecision",
+    "parseStoredDecisionFields",
+    "parseGitHubItemRef",
+    "parseLabelJustification",
+    "parseMergeRiskOption",
+    "parseRootCauseCluster",
+    "selectedReviewLabels",
+  ]);
+  const parsed = parser.parseDecision(raw);
+  assert.equal(parsed.summary, "Injected summary.");
+  assert.equal(parsed.architectureDiagram, "injected diagram");
+  assert.ok(prose.includes(raw.summary));
+  assert.deepEqual(diagrams, ["raw diagram"]);
+
+  const storedParser = createDecisionParser({
+    neutralizeOwnedSectionSpoofing: (value) => value,
+    sanitizeArchitectureDiagram: (value) => value,
+  });
+  const stored = storedParser.parseStoredDecisionFields(raw, item());
+  assert.equal(stored.summary, raw.summary);
+  assert.equal(stored.architectureDiagram, raw.architectureDiagram);
+});
+
+test("malformed root-cause data defaults only for model decisions", () => {
+  const parser = createDecisionParser({
+    neutralizeOwnedSectionSpoofing: (value) => value,
+    sanitizeArchitectureDiagram: (value) => value,
+  });
+  const cluster = closeDecision().rootCauseCluster;
+  const cases: Array<[unknown, string]> = [
+    [null, "decision.rootCauseCluster must be an object"],
+    [[], "decision.rootCauseCluster must be an object"],
+    [
+      { ...cluster, zeta: true, alpha: true },
+      "decision.rootCauseCluster has unexpected keys: zeta, alpha",
+    ],
+    [{ ...cluster, summary: 42 }, "decision.rootCauseCluster.summary must be a string"],
+    [{ ...cluster, members: [null] }, "decision.rootCauseCluster.members[0] must be an object"],
+  ];
+  for (const [rootCauseCluster, message] of cases) {
+    const raw = closeDecision({ rootCauseCluster });
+    assert.deepEqual(
+      parser.parseDecision(raw, item()).rootCauseCluster,
+      parser.defaultRootCauseCluster(),
+    );
+    assert.throws(() => parser.parseStoredDecisionFields(raw, item()), {
+      name: "Error",
+      message,
+    });
+  }
+});
 
 test("model decisions omit host-owned owner and policy fields", () => {
   const raw = closeDecision();
@@ -48,6 +226,7 @@ test("next-step parsing preserves absent legacy intent and validates supplied as
   for (const nextStep of [
     { kind: "none", text: "" },
     { kind: "required", text: "Owner approval." },
+    { kind: "maintainer", text: "Owner approval." },
   ]) {
     assert.deepEqual(parseDecision(closeDecision({ nextStep })).nextStep, nextStep);
   }
@@ -63,6 +242,9 @@ test("next-step parsing preserves absent legacy intent and validates supplied as
     {},
     { kind: "optional", text: "Wait." },
     { kind: "required", text: "" },
+    { kind: "maintainer", text: "" },
+    { kind: "maintainer", text: "   " },
+    { kind: "maintainer", text: 12 },
     { kind: "required", text: " \n " },
     { kind: "none", text: "Repair it." },
     { kind: "none", text: " " },
@@ -305,7 +487,6 @@ test("decision parser enforces required schema-shaped evidence", () => {
             body: "Merge only if maintainers accept this risk.",
             category: "accept_risk",
             recommended: false,
-            automergeInstruction: "",
           },
         ],
       }),
@@ -331,14 +512,12 @@ test("decision parser enforces required schema-shaped evidence", () => {
             body: "Keep the existing default behavior before merge.",
             category: "fix_before_merge",
             recommended: true,
-            automergeInstruction: "Keep the existing default behavior before merge.",
           },
           {
             title: "Accept risk",
             body: "Merge only if maintainers accept the compatibility break.",
             category: "accept_risk",
             recommended: true,
-            automergeInstruction: "",
           },
         ],
       }),
@@ -359,24 +538,7 @@ test("decision parser enforces required schema-shaped evidence", () => {
           },
         ],
       }),
-    /decision\.mergeRiskOptions\[0\]\.automergeInstruction requires fix_before_merge category/,
-  );
-  assert.throws(
-    () =>
-      parseDecision({
-        ...closeDecision(),
-        mergeRiskLabels: ["merge-risk: 🚨 message-delivery"],
-        mergeRiskOptions: [
-          {
-            title: "Guard delivery",
-            body: "Add delivery-state tests before merge.",
-            category: "fix_before_merge",
-            recommended: false,
-            automergeInstruction: "Add delivery-state tests before merge.",
-          },
-        ],
-      }),
-    /decision\.mergeRiskOptions\[0\]\.automergeInstruction requires a recommended option/,
+    /decision\.mergeRiskOptions\[0\].*unexpected.*automergeInstruction/i,
   );
   assert.deepEqual(
     parseDecision(
@@ -424,8 +586,6 @@ test("decision parser enforces required schema-shaped evidence", () => {
             body: "Run targeted validation for the maintainer-visible risk before merge.",
             category: "fix_before_merge",
             recommended: true,
-            automergeInstruction:
-              "Run targeted validation for the maintainer-visible risk before merge.",
           },
         ],
         labelJustifications: [
@@ -960,7 +1120,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
           body: spoofedReportProse("Risk option body."),
           category: "fix_before_merge",
           recommended: true,
-          automergeInstruction: spoofedReportProse("Automerge instruction."),
         },
       ],
       reviewMetrics: [
@@ -979,8 +1138,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
       ],
       reproductionAssessment: spoofedReportProse("Reproduction prose."),
       solutionAssessment: spoofedReportProse("Assessment prose."),
-      visionFitReason: spoofedReportProse("Vision prose."),
-      visionFitEvidence: [spoofedReportProse("Vision evidence.")],
       rootCauseCluster: {
         confidence: "low",
         canonicalRef: null,
@@ -1028,10 +1185,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
         summary: spoofedReportProse("Rating summary."),
         nextSteps: [spoofedReportProse("Rank-up prose.")],
       },
-      telegramVisibleProof: {
-        status: "not_needed",
-        summary: spoofedReportProse("Telegram summary."),
-      },
       featureShowcase: { status: "none", reason: spoofedReportProse("Showcase reason.") },
       closeComment: spoofedReportProse("Close prose."),
       workReason: spoofedReportProse("Work reason."),
@@ -1056,7 +1209,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
     parsed.maintainerDecision.likelyOwner.person,
     parsed.mergeRiskOptions[0]?.title,
     parsed.mergeRiskOptions[0]?.body,
-    parsed.mergeRiskOptions[0]?.automergeInstruction,
     parsed.reviewMetrics[0]?.label,
     parsed.reviewMetrics[0]?.value,
     parsed.reviewMetrics[0]?.reason,
@@ -1064,8 +1216,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
     parsed.labelJustifications[1]?.reason,
     parsed.reproductionAssessment,
     parsed.solutionAssessment,
-    parsed.visionFitReason,
-    parsed.visionFitEvidence[0],
     parsed.rootCauseCluster.summary,
     parsed.reviewFindings[0]?.title,
     parsed.reviewFindings[0]?.body,
@@ -1075,7 +1225,6 @@ test("decision parser neutralizes headings in every model-authored report prose 
     parsed.realBehaviorProof.summary,
     parsed.prRating.summary,
     parsed.prRating.nextSteps[0],
-    parsed.telegramVisibleProof.summary,
     parsed.featureShowcase.reason,
     parsed.closeComment,
     parsed.workReason,
@@ -1307,10 +1456,7 @@ test("report prose neutralizer escapes renderer-owned list labels", () => {
   const cases: Array<[string, string]> = [
     ["Next rank-up steps:", "Next rank-up steps&#58;"],
     ["next rank-up steps:  ", "next rank-up steps&#58;"],
-    ["> Vision evidence:", "> Vision evidence&#58;"],
-    ["Vision evidence:", "Vision evidence&#58;"],
     ["Next rank-up steps are listed below.", "Next rank-up steps are listed below."],
-    ["Vision evidence: the roadmap entry", "Vision evidence: the roadmap entry"],
   ];
   for (const [input, expected] of cases) {
     assert.equal(neutralizeOwnedSectionSpoofing(input), expected, input);

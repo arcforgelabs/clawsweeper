@@ -28,10 +28,6 @@ import {
   reviewStructuralPullStateDigest,
   type ReviewStructuralRecord,
 } from "./review-structural-cache.js";
-import {
-  fitPrHydrationSnapshotToPublicationLimit,
-  serializePrHydrationSnapshot,
-} from "./pr-hydration-snapshot.js";
 import { parseNextStep } from "./clawsweeper-next-step.js";
 import { replaceFrontMatterValue } from "./report-front-matter.js";
 import { reviewRecordFrontMatterLine } from "./review-record.js";
@@ -64,7 +60,7 @@ import {
   runtimeReviewText,
 } from "./clawsweeper-report-context.js";
 import { prSurfaceFilesFromContext } from "./clawsweeper-orchestration-foundation.js";
-import { fixedInText, formatTimestamp } from "./clawsweeper-status-context.js";
+import { fixedInText, formatTimestamp } from "./clawsweeper-status-presentation.js";
 
 export function localCheckoutAccessForDecision(
   decision: Pick<Decision, "localCheckoutAccess">,
@@ -171,22 +167,6 @@ function renderMaintainerDecisionReportSection(decision: Decision): string {
     "Options:",
     "",
     options,
-  ].join("\n");
-}
-
-function renderVisionFitReportSection(decision: Decision): string {
-  return [
-    `Status: ${decision.visionFit}`,
-    "",
-    `Implementation complexity: ${decision.implementationComplexity}`,
-    "",
-    `Auto implementation candidate: ${decision.autoImplementationCandidate}`,
-    "",
-    `Reason: ${sentence(decision.visionFitReason)}`,
-    "",
-    "Vision evidence:",
-    "",
-    markdownList(decision.visionFitEvidence),
   ].join("\n");
 }
 
@@ -356,14 +336,6 @@ function renderPrRatingReportSection(decision: Decision): string {
   return renderPrRatingAssessmentReportSection(decision.prRating, decision.realBehaviorProof);
 }
 
-function renderTelegramVisibleProofReportSection(decision: Decision): string {
-  return [
-    `Status: ${decision.telegramVisibleProof.status}`,
-    "",
-    `Summary: ${sentence(decision.telegramVisibleProof.summary)}`,
-  ].join("\n");
-}
-
 function renderFeatureShowcaseReportSection(decision: Decision): string {
   return [
     `Status: ${decision.featureShowcase.status}`,
@@ -483,6 +455,7 @@ export function markdownFor(options: {
   git: GitInfo;
   action: Action;
   reviewMode: "propose" | "apply";
+  localRange?: boolean;
   snapshotHash: string;
   contentDigest: string;
   reviewPolicy: string;
@@ -555,7 +528,6 @@ export function markdownFor(options: {
   const reproductionAssessment =
     options.decision.reproductionAssessment.trim() || "_Not provided._";
   const solutionAssessment = options.decision.solutionAssessment.trim() || "_Not provided._";
-  const visionFit = renderVisionFitReportSection(options.decision);
   const rootCauseCluster = renderRootCauseClusterReportSection(options.decision);
   // Product, provenance, and testing reviews judge pull requests only.
   const pullRequestReviewSections =
@@ -574,7 +546,6 @@ export function markdownFor(options: {
   const securityReview = renderSecurityReviewReportSection(options.decision);
   const realBehaviorProof = renderRealBehaviorProofReportSection(options.decision);
   const prRating = renderPrRatingReportSection(options.decision);
-  const telegramVisibleProof = renderTelegramVisibleProofReportSection(options.decision);
   const featureShowcase = renderFeatureShowcaseReportSection(options.decision);
   const agentsPolicyStatus = renderAgentsPolicyStatusReportSection(options.decision);
   const workCandidateSection = renderWorkCandidateReportSection(options.decision);
@@ -587,25 +558,29 @@ export function markdownFor(options: {
     { decision: options.decision },
     options.item,
   );
+  // Coverage scans read a bounded prefix. Keep its scalar facts ahead of
+  // variable labels, evidence and the large typed review record.
   const markdown = `---
 number: ${options.item.number}
 repository: ${options.item.repo}
 type: ${options.item.kind}
+reviewed_at: ${reviewedAt}
+pull_head_sha: ${pullHeadShaFromContext(options.context) ?? "unknown"}
+review_status: ${reviewStatusForDecision(options.decision)}
+local_checkout_access: ${localCheckoutAccessForDecision(options.decision)}
+local_checkout_access_source: ${localCheckoutAccessSourceForDecision(options.decision)}
 title: ${JSON.stringify(options.item.title)}
 url: ${options.item.url}
 state_at_review: open
 item_created_at: ${options.item.createdAt}
 item_updated_at: ${options.item.updatedAt}
-author: ${options.item.author}
+${options.localRange ? "review_origin: local_range\n" : ""}author: ${options.item.author}
 author_association: ${options.item.authorAssociation}
 labels: ${JSON.stringify(options.item.labels)}
 bulk_filer_detected: ${options.context.bulkFiler?.detected === true}
-reviewed_at: ${reviewedAt}
 review_lease_owner: ${options.reviewLeaseOwner ?? "unknown"}
 review_lease_comment_id: ${options.reviewLeaseCommentId ?? "unknown"}
 main_sha: ${options.git.mainSha}
-pull_head_sha: ${pullHeadShaFromContext(options.context) ?? "unknown"}
-pr_hydration_snapshot: ${serializePrHydrationSnapshot(options.context.prHydrationSnapshot)}
 reviewed_pull_state_digest: ${
     reviewedPullStateDigest
       ? (reviewStructuralPullStateDigest(reviewedPullStateDigest) ?? "unknown")
@@ -653,11 +628,8 @@ review_additional_prompt_chars: ${reviewTelemetryNumber(options.runtime.addition
 review_context_elapsed_ms: ${reviewTelemetryNumber(options.runtime.contextElapsedMs)}
 review_codex_elapsed_ms: ${reviewTelemetryNumber(options.runtime.codexElapsedMs)}
 review_mode: ${options.reviewMode}
-review_status: ${reviewStatusForDecision(options.decision)}
 review_terminal_failure: ${options.decision.codexTerminalFailure === true}
 review_checkout_inspection_failed: ${options.decision.checkoutInspectionFailed === true}
-local_checkout_access: ${localCheckoutAccessForDecision(options.decision)}
-local_checkout_access_source: ${localCheckoutAccessSourceForDecision(options.decision)}
 item_snapshot_hash: ${options.snapshotHash}
 review_content_digest: ${options.contentDigest}
 last_full_review_at: ${reviewedAt}
@@ -722,8 +694,6 @@ reproduction_confidence: ${options.decision.reproductionConfidence}
 requires_new_feature: ${options.decision.requiresNewFeature}
 requires_new_config_option: ${options.decision.requiresNewConfigOption}
 requires_product_decision: ${options.decision.requiresProductDecision}
-vision_fit: ${options.decision.visionFit}
-vision_fit_evidence: ${jsonFrontMatterValue(options.decision.visionFitEvidence)}
 implementation_complexity: ${options.decision.implementationComplexity}
 auto_implementation_candidate: ${options.decision.autoImplementationCandidate}
 real_behavior_proof_status: ${options.decision.realBehaviorProof.status}
@@ -732,7 +702,6 @@ real_behavior_proof_needs_contributor_action: ${options.decision.realBehaviorPro
 ${options.decision.realBehaviorProof.dataModelCompatibility ? `real_behavior_proof_data_model_compatibility: ${options.decision.realBehaviorProof.dataModelCompatibility}\n` : ""}pr_rating_overall: ${options.decision.prRating.overallTier}
 pr_rating_proof: ${options.decision.prRating.proofTier}
 pr_rating_patch: ${options.decision.prRating.patchTier}
-telegram_visible_proof_status: ${options.decision.telegramVisibleProof.status}
 feature_showcase_status: ${options.decision.featureShowcase.status}
 agents_policy_status: ${options.decision.agentsPolicyStatus.status}
 product_kind: ${options.decision.productReview.kind}
@@ -752,9 +721,9 @@ Type: ${options.item.kind}
 
 URL: ${markdownLink(options.item.url, options.item.url)}
 
-Author: ${options.item.author}
+Author: ${options.item.author}${options.localRange ? " (unverified local Git display name)" : ""}
 
-Author association: ${options.item.authorAssociation}
+Author association: ${options.item.authorAssociation}${options.localRange ? " (synthetic contributor proof context; GitHub role is unverified)" : ""}
 
 Labels: ${labels}
 
@@ -824,10 +793,6 @@ ${reproductionAssessment}
 
 ${solutionAssessment}
 
-## ${REVIEW_SECTIONS.visionFit}
-
-${visionFit}
-
 ## ${REVIEW_SECTIONS.rootCauseCluster}
 
 ${rootCauseCluster}
@@ -847,10 +812,6 @@ ${realBehaviorProof}
 ## ${REVIEW_SECTIONS.prRating}
 
 ${prRating}
-
-## ${REVIEW_SECTIONS.telegramVisibleProof}
-
-${telegramVisibleProof}
 
 ## ${REVIEW_SECTIONS.featureShowcase}
 
@@ -928,5 +889,5 @@ ${renderReviewContextBudget(options.context)}
 - context collection ms: ${reviewTelemetryNumber(options.runtime.contextElapsedMs)}
 - Codex review ms: ${reviewTelemetryNumber(options.runtime.codexElapsedMs)}
   `;
-  return fitPrHydrationSnapshotToPublicationLimit(markdown);
+  return markdown;
 }

@@ -19,12 +19,22 @@ The global worker budget comes from `config/automation-limits.json`; see
 [Automation Limits](limits.md) for the derived lane limits and GitHub variable
 overrides.
 
+Exact admission and publication rechecks bind the returned GitHub repository,
+number, and item URL to the requested identity. A transferred issue completes
+through the existing missing-target disposition for its former identity. It
+does not borrow the destination number for review, cache repair, or mutation;
+the destination repository's normal intake owns any subsequent review.
+Cached items that point to another identity are ignored and verified with a
+live read before use.
+
 Exact-review completion sends `review_failure_reason` for every diagnostics
 manifest with `failure.stage: agent_input_scan` and `retryable: false`, using
 `failure.reason_code` verbatim. The accepted scanner reasons are
 `scanner_unavailable`, `scanner_failed`, `findings`, `deadline`, `staging_limit`,
 `incomplete_source`, `source_drift`, `unsafe_path`, and `unsupported_content`;
 `source_incompatible` remains a separate terminal source-preparation reason.
+Operators can follow the [input-scan diagnostic inspection recipe](input-scan-diagnostics.md)
+from the failed workflow summary without reading raw scanner logs.
 The shared allowlist lives in `src/exact-review-failure-reason.ts`. Exit codes
 78 and 79 still identify `incomplete_source` and `findings` without a manifest.
 A matching non-retryable `review_failure` detail is accepted; retryable or
@@ -107,6 +117,31 @@ content caches. Changed PR content goes to Codex, including source comments
 and formatting. See [Review Cache](review-cache.md) for admission, freshness,
 and runtime packaging rules.
 
+Queue-owned background re-reviews, including issue re-reviews after target-branch
+commits, carry their start lease by editing an existing durable review comment.
+The old review remains readable during the run. Acquisition and owned cleanup
+read the original bytes through the lossless comment transport. If the combined
+body would exceed the 61,440-byte durable limit, reservation leaves it untouched
+and uses a separate placeholder. First and explicit reviews retain their existing
+start path. Separate leases outrank in-place leases; an in-place owner yields at
+the live apply mutation guards if an uncoordinated POST contender appears.
+Publication retains an adopted in-place lock through label and close mutations;
+final cleanup removes only the owned status/lease.
+Lease expiry and orphan recovery still apply to both forms; see
+[PR review comments](pr-review-comments.md#durable-comment-shape).
+
+Ordinary PRs receive one automatic completed review after ten quiet minutes of
+stable head, title, body, and draft state. Pushes and edits after that answer need
+an explicit `@clawsweeper re-review`; the queue rejects hot/normal offers for them,
+and queue admission, dispatch, and claim enforce the same durable completion
+fact. Failed and stale-source attempts may finish the first answer. Explicit
+requests retain their existing automation. See
+[automation limits](limits.md) for quiet-window and persistence details.
+
+Planners can still offer candidates from report cadence: a complete-looking
+report may never have been published. The queue owns the lifetime fact and
+rejects answered candidates before starting a review workflow.
+
 ### Control-plane workflow retries
 
 Shell calls to the control plane in `review-plan.yml`, `sweep.yml`,
@@ -152,6 +187,23 @@ environment, validates it, and prints the JSON body for `control_plane_curl`.
 `--review-acknowledgement-comment-id` is accepted only with `--phase status`, and
 `--generation-start` only with `--phase review`, as the queue requires. An
 invalid tuple stops the step before any request.
+
+The queue emits best-effort structured Workers Logs after committed enqueue
+outcomes and newly acknowledged review starts. `enqueue_disposition` records
+queued, deduped, replayed, shed, rejected or conflicting intake; validation
+failures before the transaction are excluded. `committed_start_acknowledgement`
+follows the first accepted generation-start heartbeat's state write, alarm
+scheduling and response preparation. Replayed heartbeats, publication work and
+terminal finalizers do not produce another review-start fact. This acknowledges
+the queue transition, not model execution or receipt by the caller.
+
+These facts and the existing source-drift park warnings contain bounded counts,
+finite trigger classes and SHA-256 hashes for target, delivery, lease and run
+joins. They omit raw identifiers, URLs, bodies and actor data. Hashes permit
+correlation; they are not anonymization. Logging/hash failures do not change
+queue outcomes. Logs may be sampled or lost and have finite retention: they
+cannot establish a lifetime review allowance, enforce cadence or prove a
+complete review history. No admission policy or durable accounting changes.
 
 After checkout, the direct lifecycle step in `event-review-apply` and the
 receipt steps in `event-review-publish` build their lifecycle bodies with
@@ -243,14 +295,53 @@ bodies are not logged. Exhaustion remains a failed workflow. This improves
 completeness of the existing review-observability data without changing its
 schema or mutation boundaries.
 
-Maintainer-authored and `maintainer`-labeled items require an explicit review
-request. Automatic intake, scheduled selection, claimed reviews, and hosted
-publication apply this policy; a source-drift retry does not inherit the
-original command's opt-in. Existing autofix/automerge labels remain opt-ins.
-The target dispatcher and direct webhook share a single reminder identity per
-item, posted only when opened or ready for review. Edits, pushes, and sweeps do
-not post reminders. Request reviews only when needed, after completing work and
-validation; agents must not automatically repeat requests.
+Run telemetry retains its 30-day window; physical cleanup runs at most once
+per five minutes per queue instance rather than scanning the history on every
+write or dashboard poll. Delivery receipt counts stay exact while reusing the
+previous count and reading only newly appended rowids; deletion discards that
+count before rowids can be reused. Terminal command receipts retain their
+existing cutoff and use the outcome/time index. State-writer acquire retries
+still refresh queued ticket liveness, but do not rewrite timestamps already
+set by admission or lease acquisition.
+
+Maintainer-authored and `maintainer`-labeled items created before 2026-10-15
+03:50 UTC (`MAINTAINER_AUTOMATIC_FIRST_REVIEW_FROM`) require an explicit review
+request; newer ones are admitted like everyone else's. Automatic intake,
+scheduled selection, claimed reviews, and hosted publication apply this policy,
+and an unknown creation time keeps the request rule. The periodic parked-item
+check releases a `maintainer_request_required` hold once the live item no
+longer requires a request. A verified request stays open while the queue
+finishes answering it: when the item changes before the request's review
+fully applies, including a close check that drifts after the durable review
+comment synced, the queue requeues that generation in place instead of
+finalizing the command, keeping the command status and verification, and the
+retry continues the same request. When the review's publication was deferred,
+its publisher requeues the claimed decision instead; the queue keeps the
+verification only while that publisher still holds its own publication of the
+request (named by the requeue's `publisher-source-drift:<run>:<attempt>`
+delivery id), that publication is the item's newest, and no other command
+reached the item after the request's review. If a review without a request of
+its own is already pending for the item, that review takes over the
+still-current request and keeps its newer source. An active, parked, or
+request-bearing queued review stays untouched. The publisher's lifecycle
+`requeue` then stands only when a review at the item admitted the same request
+after the request's review; otherwise the queue records the request as
+superseded, so its status still gets a terminal answer. Any other source-drift
+requeue keeps the command
+status but not the verification: the queue enforces this whenever it loads an
+item, so a requeue that found no queued item, including one persisted before
+this rule, cannot let a finished or replaced request authorize another review.
+Both continuation prefixes are queue-owned: `/enqueue` rejects a caller delivery
+id that uses either one as `reserved_delivery_id`. When a retry that still
+carries a request is skipped because it lacks that verification, its review job
+answers the request's status as "Waiting" with a request to re-review, so the
+status never stays "Review in progress". A push after the request is
+answered and a scheduled pass also need a new request.
+The direct webhook posts one opt-in reminder per older maintainer item, only when
+it is opened or marked ready for review; the target dispatcher posts none.
+Edits, pushes, and sweeps do not post reminders. Request reviews only when
+needed, after completing work and validation; agents must not automatically
+repeat requests.
 
 ## Workflow
 
@@ -316,7 +407,10 @@ on every warm fetch, so deleted or moved tags cannot survive in the checkout.
 A non-fast-forward branch update rebuilds the cache so its old history cannot
 retain tags outside the current branch. A failed or partial restore is discarded,
 a failed cache fetch rebuilds the cache, and a failed local clone falls back to a clean clone without
-saving. The pinned Codex source cache is keyed by the Codex version pinned in the
+saving. Each network clone or fetch stops after `CLAWSWEEPER_REVIEW_TARGET_CHECKOUT_TIMEOUT_MS`
+(default 30 minutes, at most 120) and its git process group is killed. Local clones from the cache
+are not under that deadline. Git's `http.lowSpeedLimit` stays at its default so a quiet tip-blob
+negotiation is not aborted before the deadline. The pinned Codex source cache is keyed by the Codex version pinned in the
 target checkout and is saved once per version.
 
 The receiver workflow is `.github/workflows/sweep.yml`.
@@ -442,6 +536,10 @@ strictly newer durable review tuple for the same revision. The verified result
 travels as structured apply evidence; reason text is diagnostic only. Ambiguous
 or mixed results cannot terminalize the artifact, and legacy tupleless artifacts
 retain the existing fresh-review path.
+When command owners reuse a lease comment, equal ids require distinct known
+owners, an unambiguous complete durable identity, matching head and source
+revision, and a strictly later review time. Supersession retires the older
+artifact; it does not certify current source freshness or request another review.
 
 Legacy protocol-v1 review leases without lifecycle admission rows complete without
 writing lifecycle facts. Once a completion commits its queue transition, alarm
@@ -504,6 +602,14 @@ workflow also records a typed repository-pool observation if its final comment
 router dispatch encounters quota pressure. All typed observations and request
 counters are acknowledged with the same fenced batch completion, so a delayed
 cleanup is idempotent and cannot duplicate accounting.
+
+The batch CLI's `complete` and `release` summaries report five fixed
+`submitted_outcomes` counts: `published`, `superseded`, `retryable_failure`,
+`refresh_required`, and `permanent_failure`. These replace the misleading
+`retryable` total that combined all three failure kinds. `accepted` (`released`
+for cleanup) and `skipped` are separate server acknowledgement totals; submitted
+classifications do not prove which members were accepted or their final queue
+disposition. Retry budgets and refresh policy still belong to the queue.
 
 ## Schedules
 
@@ -644,8 +750,8 @@ continue dispatch from a default cursor; persistence failure after dispatch
 does not fail those lanes. Audit fanout requires a batch-aware cursor store and
 stops on state failures so outstanding children cannot be forgotten.
 
-Normal fanout refreshes the same signed live-open inventory consumed by
-`GET /api/review-coverage`, and both normal and hot fanout skip repositories
+Normal fanout refreshes the same signed live-open inventory consumed by the
+aggregate-only anonymous API and authenticated coverage build read, and both normal and hot fanout skip repositories
 with no open items. Normal fanout reserves a rotating slot for every selected
 repository, keeps the largest untracked backlog in each cycle, and apportions
 the remaining candidate volume by backlog share. The rotating slice is
@@ -658,9 +764,51 @@ for the same `untracked_open` boundary as the coverage endpoint. A hydrated
 legacy backfill report remains review context, but it does not count as coverage
 or yield a planner slot to a canonical re-review until a modern tuple exists.
 
-The six-hour audit fanout also writes a GitHub Actions summary with canonical
-open-item reports reviewed in the trailing seven days versus batched live open
-issue and PR totals across the complete dynamic inventory.
+The six-hour audit fanout also writes a GitHub Actions coverage summary.
+Coverage joins canonical records to a bounded live-open identity census; it
+never clamps historical record counts to live totals. Each repository must
+finish pagination with stable counts, unique identities, complete live labels
+and measured PR heads. The observer-only census has a serial 25-request budget,
+a 10-page limit per issue/PR connection, and the existing payload/storage bounds;
+exhaustion or read/count/pagination failures produce explicit unknown evidence,
+not a partial denominator. This does not change review admission, scheduling
+rates, queue capacity, concurrency or publication ownership.
+
+The public Coverage page uses public-attested observations and rechecks
+repository visibility during the static build. Open is a separately timestamped
+GitHub count witness: a large repository retains its trusted as-of Open count
+even when the bounded identity scan cannot finish. Missing, older-than-12-hour
+or future count witnesses are unknown, never observed zero. Reviewable,
+exclusions and categories require complete qualified identity evidence; their
+conservation checks are not relaxed for a partial census. Public observations
+of unverified eligibility and archived/fork/alias/history references are explicit,
+not silently inserted into an active review denominator.
+
+Missing/stale/future identity observations and older-than-15-minute or future
+record scans make affected review evidence unknown without erasing trusted
+count witnesses. A once-per-build read awaits an expired scan's coalesced
+refresh for at most5seconds; it does not publish the expired cache while that
+refresh finishes after the build. Failure/timeout reports absent scan evidence,
+never copied stale categories with a fabricated fresh date. Existing page yields
+and work/rate limits remain unchanged. The existing canonical-body store automatically materializes
+missing/stale-bound v2 coverage facts on a coverage read-model refresh, capped
+at32verified body reads/4MiB. Conditional digest/revision guards update only
+coverage_facts; bodies, placement, canonical/export revisions, timestamps, tuple
+receipts and admission/answer history are untouched. Existing one-review PRs
+need no new review or publication. Unavailable bodies remain unknown, never
+cache-poisoned; later current revisions always win. A review must match item kind and PR head,
+have verified local checkout completion and a valid non-future review date,
+and not predate the latest observed reopen event. The bounded census reads
+only the latest reopen event; generic `updated_at` can include automation and
+is not treated as semantic source drift. These fields do not establish current
+issue body/comment semantic freshness. Explicit stale states/head/reopen
+changes are separate from age expiry. These observations do not grant
+permission for another review. Stored 7/30-day review history, archived/fork/alias
+rows and absent historical repositories remain separate; an absent row is not
+zero live work or proof that the GitHub App is installed. Private/inaccessible
+repository names are withheld by the existing fail-closed visibility checks.
+See the local proof contract at `docs/proof/ui-live-coverage/README.md` for
+scenarios, provenance and provider limits.
 
 Exact event review also starts Codex before generated-state hydration. The
 single-item review only needs the target repository and live GitHub item state;
@@ -709,7 +857,8 @@ Exact PR review marks ClawSweeper's own acknowledgement comment
 (`clawsweeper-pr-ack`) complete after the review snapshot and before direct
 publication, and GitHub moves the PR's `updated_at` for that edit. The producer's
 apply then syncs the durable review comment, may edit managed labels, and
-releases (deletes) its review lease comment. When direct publication is
+releases its review lease after all apply mutations (deleting a separate
+placeholder or removing the owned in-place status from the completed review). When direct publication is
 deferred, the batch publisher re-applies the same review against those writes.
 Apply freshness treats such an update as automation-only only when a receipt
 ClawSweeper recorded for the item accounts for the latest `updated_at` and the
@@ -1004,6 +1153,12 @@ publish those records, and synchronize the selected durable review comments in
 the same job. Exact issue/PR reviews likewise synchronize their selected comments
 before completing. Neither path dispatches a second broad comment scan.
 
+Review publication requires the exact comment ID, a trusted author, and the
+complete intended body. If the write response cannot verify those facts, a
+fresh byte-preserving read verifies the target. This avoids the GitHub CLI's
+display sanitization of literal Unicode escape examples. Receipt reads bypass
+the ETag cache and retain the existing credential, retry, and deadline guards.
+
 Automatic apply may close up to 40 items per run. Long apply runs commit
 checkpoints every 40 fresh closes and dispatch a
 continuation with a fresh GitHub App token after any checkpoint that closes at
@@ -1164,14 +1319,16 @@ repository's 15-minute schedule remains the fallback if dispatch is delayed.
 Useful commands:
 
 ```bash
-gh api 'repos/openclaw/clawsweeper/actions/runs?per_page=100' \
-  --jq '.workflow_runs[] | select(.name == "ClawSweeper") | {id,name,display_title,event,status,conclusion,created_at,head_sha,html_url}'
+gh api 'repos/openclaw/clawsweeper/actions/workflows/sweep.yml/runs?per_page=100' \
+  --jq '.workflow_runs[] | {id,name,display_title,event,status,conclusion,created_at,head_sha,html_url}'
 
 gh run view <run-id> --repo openclaw/clawsweeper --json jobs \
   --jq '[.jobs[] | select(.name == "Review exact event item") | select(.status=="in_progress")] | length'
 
 gh api repos/openclaw/clawsweeper/readme --jq '.content' | base64 --decode
 ```
+
+Select the sweep workflow by filename; its run names vary with the task.
 
 Read the remote generated README, not only the local checkout, when checking the
 live dashboard. Generated dashboard state is published from GitHub Actions and

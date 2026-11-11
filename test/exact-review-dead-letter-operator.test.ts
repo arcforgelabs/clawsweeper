@@ -720,6 +720,46 @@ test("parked pull request reconciliation requires immutable source drift", async
     assert.equal(JSON.parse(forced.stdout).recovered_targets, 1);
     assert.equal(mutations.length, 4);
     assert.equal(mutations[3].override_retry_budget, true);
+
+    // A policy hold has no retry budget to reset: forcing an unchanged held
+    // review would only re-park it, so it still needs a source change.
+    row.parked_reason = "maintainer_request_required";
+    const forcedHold = await runOperator(
+      [
+        ...common,
+        "--execute",
+        "--force-unchanged",
+        "--output",
+        join(directory, "forced-hold.json"),
+      ],
+      `http://127.0.0.1:${address.port}`,
+      secret,
+    );
+    assert.equal(forcedHold.code, 0, forcedHold.stderr);
+    assert.equal(JSON.parse(forcedHold.stdout).recovered_targets, 0);
+    assert.deepEqual(JSON.parse(forcedHold.stdout).skip_reasons, {
+      unchanged_review_identity: 1,
+    });
+    assert.equal(mutations.length, 4);
+
+    // The source-drift loop counter is a budget the Worker restarts on an
+    // operator recovery, so forcing an unchanged loop still recovers it.
+    row.parked_reason = "source_drift_loop";
+    const forcedLoop = await runOperator(
+      [
+        ...common,
+        "--execute",
+        "--force-unchanged",
+        "--output",
+        join(directory, "forced-loop.json"),
+      ],
+      `http://127.0.0.1:${address.port}`,
+      secret,
+    );
+    assert.equal(forcedLoop.code, 0, forcedLoop.stderr);
+    assert.equal(JSON.parse(forcedLoop.stdout).recovered_targets, 1);
+    assert.equal(mutations.length, 5);
+    assert.equal(mutations[4].override_retry_budget, true);
   } finally {
     server.close();
     await rm(directory, { recursive: true, force: true });
@@ -2564,6 +2604,66 @@ test("terminal target rechecks stay bounded for closed issues and pull requests"
   }
 });
 
+test("permanently blocked closed targets cannot starve later closed-target cleanup", async () => {
+  // Production: the same ten closed targets were refused by the guarded
+  // resolve on every scheduled run, used the whole terminal recheck budget,
+  // and left every later closed target at terminal_recheck_cap forever.
+  const targets = Array.from({ length: 12 }, (_, index) => index + 1);
+  const blocked = targets.slice(0, 10).map((number) => `closed-${number}`);
+  const scenario = await automaticReconcileScenario({
+    rows: targets.map((number) =>
+      row(
+        `closed-${number}`,
+        `publication:closed-${number}`,
+        number,
+        "retry_exhausted",
+        true,
+        "eligible",
+        `openclaw/repo#${number}`,
+      ),
+    ),
+    closedNumbers: targets,
+    blockedCleanupIds: blocked,
+    maxTargets: 100,
+    maxRecoveries: 10,
+  });
+
+  assert.equal(scenario.first.code, 0, scenario.first.stderr);
+  const summary = JSON.parse(scenario.first.stdout);
+  assert.equal(summary.closed_rows, 2, scenario.first.stdout);
+  assert.equal(summary.skip_reasons.terminal_recheck_cap, undefined, scenario.first.stdout);
+  assert.equal(summary.skip_reasons.blocked_alias, 10, scenario.first.stdout);
+});
+
+test("refunded terminal rechecks stay bounded when every closed target is blocked", async () => {
+  const targets = Array.from({ length: 30 }, (_, index) => index + 1);
+  const scenario = await automaticReconcileScenario({
+    rows: targets.map((number) =>
+      row(
+        `closed-${number}`,
+        `publication:closed-${number}`,
+        number,
+        "retry_exhausted",
+        true,
+        "eligible",
+        `openclaw/repo#${number}`,
+      ),
+    ),
+    closedNumbers: targets,
+    blockedCleanupIds: targets.map((number) => `closed-${number}`),
+    maxTargets: 100,
+    maxRecoveries: 10,
+  });
+
+  assert.equal(scenario.first.code, 0, scenario.first.stderr);
+  const summary = JSON.parse(scenario.first.stdout);
+  // Ten refunded plus ten counted rechecks; the rest wait for a later run.
+  assert.equal(summary.closed_rows, 0, scenario.first.stdout);
+  assert.equal(scenario.resolutions.length, 20, scenario.first.stdout);
+  assert.equal(summary.skip_reasons.blocked_alias, 20, scenario.first.stdout);
+  assert.equal(summary.skip_reasons.terminal_recheck_cap, 10, scenario.first.stdout);
+});
+
 test("mid-sized closed pull-request inventories use GraphQL identity batching", async () => {
   for (const count of [32, 40]) {
     const targets = Array.from({ length: count }, (_, index) => index + 1);
@@ -2953,6 +3053,12 @@ test("multi-owner reconciliation recovers installed targets and reports missing 
   );
   assert.deepEqual(scenario.installationRequests, ["installed-owner/repo", "missing-owner/repo"]);
   assert.deepEqual(scenario.tokenMintRequests, [123]);
+  assert.deepEqual(scenario.tokenMintBodies, [
+    {
+      repositories: ["repo"],
+      permissions: { issues: "read", pull_requests: "read" },
+    },
+  ]);
   assert.deepEqual(
     new Set(scenario.targetReadAuthorizations),
     new Set(["Bearer installed-owner-token"]),
@@ -3273,9 +3379,16 @@ test("batched discovery skips a throttled owner setup and continues with another
   assert.equal(summary.recovered_targets, 10);
   assert.equal(summary.skipped_targets, 1);
   assert.deepEqual(summary.skip_reasons, { github_throttled: 1 });
-  assert.deepEqual(scenario.installationRequests, ["owner-a/repo", "owner-b/repo-1"]);
-  assert.deepEqual(scenario.tokenMintRequests, [601, 602]);
-  assert.equal(scenario.graphqlRequests, 1);
+  assert.deepEqual(scenario.installationRequests, [
+    "owner-a/repo",
+    ...Array.from({ length: 10 }, (_, index) => `owner-b/repo-${index + 1}`),
+  ]);
+  assert.deepEqual(scenario.tokenMintRequests, [601, ...Array(10).fill(602)]);
+  assert.equal(scenario.graphqlRequests, 10);
+  assert.deepEqual(
+    scenario.tokenMintBodies.map((body) => body.repositories),
+    [["repo"], ...Array.from({ length: 10 }, (_, index) => [`repo-${index + 1}`])],
+  );
   assert.deepEqual(new Set(scenario.targetReadAuthorizations), new Set(["Bearer owner-b-token"]));
 });
 
@@ -4191,6 +4304,7 @@ async function automaticReconcileScenario(options) {
   const targetReadAuthorizations = [];
   const installationRequests = [];
   const tokenMintRequests = [];
+  const tokenMintBodies = [];
   const restRequestsByNumber = new Map();
   let duplicateFailurePending = options.failFirstDuplicateCleanup === true;
   let duplicateSkipsRemaining =
@@ -4264,6 +4378,7 @@ async function automaticReconcileScenario(options) {
     if (tokenMatch && options.targetInstallations) {
       const installationId = Number(tokenMatch[1]);
       tokenMintRequests.push(installationId);
+      tokenMintBodies.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
       const failure = options.tokenMintFailures?.get(installationId);
       if (failure) {
         response.writeHead(failure.status, {
@@ -4550,6 +4665,7 @@ async function automaticReconcileScenario(options) {
       targetReadAuthorizations,
       installationRequests,
       tokenMintRequests,
+      tokenMintBodies,
     };
   } finally {
     server.close();

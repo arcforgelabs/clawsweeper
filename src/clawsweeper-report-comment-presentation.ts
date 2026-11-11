@@ -58,6 +58,7 @@ import {
 } from "./clawsweeper-report-helpers.js";
 import { pullHeadShaFromReport } from "./clawsweeper-record-metadata.js";
 import { reportRealBehaviorProofPolicy } from "./clawsweeper-proof-policy.js";
+import { hostedPreflightSource } from "./review-preflight-display.js";
 import {
   closeEvidenceLine,
   confidenceText,
@@ -69,7 +70,6 @@ import {
   publicReviewScoresBlock,
   publicReviewTextDiffers,
   publicReviewTextIsSame,
-  publicRiskBullets,
   publicSecurityReviewLine,
   reviewFindingDetailedLine,
   reviewFindingSummaryLine,
@@ -304,11 +304,13 @@ function renderKeepOpenCommentFromReport(
         : "Codex review: blocked before merge."
       : reviewReadiness?.state === "needs-changes"
         ? "Codex review: needs changes before merge."
-        : isRepairLoopPass
-          ? "Codex review: passed."
-          : isPullRequest
-            ? "Codex review: needs maintainer review before merge."
-            : "Codex review: this still needs some work.";
+        : reviewReadiness?.state === "awaiting-maintainer"
+          ? "Codex review: ready, awaiting a maintainer decision."
+          : isRepairLoopPass
+            ? "Codex review: passed."
+            : isPullRequest
+              ? "Codex review: needs maintainer review before merge."
+              : "Codex review: this still needs some work.";
   const reviewHistory = reviewHistoryForRender(markdown, options.previousReviewCommentBody);
   const revision = reviewHistory.totalCompletedCycles + 1;
   const lines = [verdictLine, ""];
@@ -405,7 +407,7 @@ function renderKeepOpenCommentFromReport(
   }
   if (
     !isReportNoneList(risks) &&
-    !mergeRiskLine &&
+    !isPullRequest &&
     publicReviewTextDiffers(risks, nextStepLine) &&
     (!bestSolutionLine || publicReviewTextDiffers(risks, bestSolutionLine))
   ) {
@@ -413,7 +415,7 @@ function renderKeepOpenCommentFromReport(
       ...(reviewDetails.length ? [""] : []),
       "Remaining risk / open question:",
       "",
-      isPullRequest ? publicRiskBullets(risks) : risks,
+      risks,
     );
   }
   const reviewLine = closeReviewLineFromReport(markdown, profile);
@@ -495,6 +497,13 @@ function renderKeepOpenCommentFromReport(
     appendDetails("Security", securityLine || "None.");
     if (evidenceDetails.length) appendDetails("Evidence", ...evidenceDetails);
     if (prSurface) appendDetails("PR surface", prSurface);
+    if (
+      frontMatterValue(markdown, "review_status") === "complete" &&
+      reviewDecision.decision === "keep_open"
+    ) {
+      const preflightSource = hostedPreflightSource(markdown);
+      if (preflightSource) appendDetails("Preflight source", preflightSource);
+    }
     if (reviewMetrics.length) {
       appendDetails("Review metrics", renderReviewMetricsDigest(reviewMetrics));
     }
@@ -542,9 +551,6 @@ function renderKeepOpenCommentFromReport(
   if (freshness) lines.push("", freshness);
   const publicBody = neutralizeReviewControlMarkers(lines.join("\n"));
   if (!reviewHistoryBlock) return publicBody;
-  // Issues keep the pre-redesign trailing history block; only PRs moved it into the
-  // collapsed details slot.
-  if (!isPullRequest) return `${publicBody.trimEnd()}\n\n${reviewHistoryBlock}\n`;
   // The slot is always the renderer-appended last occurrence; report text earlier in
   // the body could mention the sentinel, and a plain replace would expand $-sequences.
   const slotIndex = publicBody.lastIndexOf(REVIEW_HISTORY_RENDER_SLOT);

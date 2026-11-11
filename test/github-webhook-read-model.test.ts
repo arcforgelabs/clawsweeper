@@ -1,9 +1,11 @@
+import { decodeStoredJson } from "../dashboard/stored-json.ts";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import {
   GITHUB_WEBHOOK_READ_MODEL_COMMENT_TTL_MS,
+  GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS,
   GithubWebhookReadModelStore,
   githubWebhookReadModelDeliveryFromWebhook,
 } from "../dashboard/github-webhook-read-model.ts";
@@ -20,6 +22,7 @@ import { currentReviewRevision } from "../dist/clawsweeper-report-actions.js";
 import { githubTest, installGhFixture } from "./github-runtime-fixture.ts";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createCommandOperations } from "../dist/clawsweeper-command-operations.js";
+import { withQuietReviewStartStatusLease } from "../dist/clawsweeper-review-comment-state.js";
 
 const secret = "github-read-model-test-secret";
 const repository = {
@@ -30,6 +33,49 @@ const repository = {
   fork: false,
   has_issues: true,
 };
+
+test("read model discovers and retires an in-place review lease through comment edits", async () => {
+  const now = "2026-08-14T10:00:00Z";
+  const original = "Codex review: keep open.\n\n<!-- clawsweeper-review item=77 -->";
+  const body = withQuietReviewStartStatusLease(original, {
+    number: 77,
+    kind: "issue",
+    title: "fixture",
+    headSha: "a".repeat(64),
+    startedAt: now,
+    leaseExpiresAt: "2026-08-14T11:00:00Z",
+    leaseOwner: "fixture",
+  });
+  const store = new GithubWebhookReadModelStore(new MemoryDurableStorage());
+  store.ensureSchemaSync();
+  for (const [index, text] of [body, original].entries()) {
+    const at = `2026-08-14T10:0${index}:00Z`;
+    store.ingest(
+      requiredDelivery("issue_comment", `quiet-${index}`, at, {
+        action: "edited",
+        repository,
+        issue: issue(77, "fixture", at),
+        comment: {
+          id: 123,
+          body: text,
+          updated_at: at,
+          user: { login: "clawsweeper[bot]", type: "Bot" },
+        },
+      }),
+      Date.parse(at),
+    );
+    store.repair(
+      { repository: repository.full_name, repair_kind: "placeholders", objects: [] },
+      Date.parse(at),
+    );
+    const result = await store.readPlaceholders(
+      { repository: repository.full_name, state: "open" },
+      Date.parse(at),
+    );
+    assert.equal(result.usable, true);
+    assert.equal((result.candidates as unknown[]).length, index === 0 ? 1 : 0);
+  }
+});
 
 test("raw PR webhooks preserve the Issues API discriminator and earlier marker metadata", async () => {
   const now = "2026-08-14T10:06:00.000Z";
@@ -117,9 +163,14 @@ for (const kind of ["pull_request", "stored_pull_request", "issue"] as const) {
       );
       if (kind === "stored_pull_request") {
         // Existing rows have the authoritative kind but lack the JSON marker.
+        const row = [
+          ...storage.sql.exec("SELECT snapshot_json FROM github_webhook_read_model_items_v1"),
+        ][0]!;
+        const legacy = JSON.parse(decodeStoredJson(String(row.snapshot_json)));
+        delete legacy.pull_request;
         storage.sql.exec(
-          `UPDATE github_webhook_read_model_items_v1
-            SET snapshot_json = json_remove(snapshot_json, '$.pull_request')`,
+          "UPDATE github_webhook_read_model_items_v1 SET snapshot_json = ?",
+          JSON.stringify(legacy),
         );
       }
       const before = [...storage.sql.exec(`SELECT * FROM github_webhook_read_model_items_v1`)];
@@ -253,8 +304,9 @@ test("read model dedupes GUIDs, keeps object watermarks monotonic, tombstones, a
 
   for (const [deliveryId, action, body, updatedAt] of [
     ["comment-create", "created", "placeholder", "2026-08-14T10:01:00.000Z"],
-    ["comment-delete", "deleted", "placeholder", "2026-08-14T10:03:00.000Z"],
-    ["comment-late-edit", "edited", "resurrected", "2026-08-14T10:02:00.000Z"],
+    ["comment-delete", "deleted", "placeholder", "2026-08-14T10:01:00.000Z"],
+    ["comment-equal-edit", "edited", "resurrected", "2026-08-14T10:01:00.000Z"],
+    ["comment-late-edit", "edited", "resurrected", "2026-08-14T10:00:00.000Z"],
   ] as const) {
     store.ingest(
       requiredDelivery("issue_comment", deliveryId, updatedAt, {
@@ -286,6 +338,49 @@ test("read model dedupes GUIDs, keeps object watermarks monotonic, tombstones, a
   assert.equal(stale.usable, false);
   assert.equal((stale.freshness as Record<string, unknown>).stale, true);
 });
+
+for (const event of ["issue_comment", "pull_request_review_comment"] as const) {
+  test(`${event} deletion wins equal timestamps and releases retained payloads`, () => {
+    const storage = new MemoryDurableStorage();
+    const store = new GithubWebhookReadModelStore(storage);
+    store.ensureSchemaSync();
+    const now = Date.parse("2026-08-26T12:00:00Z");
+    const at = now - GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS - 1;
+    const updatedAt = new Date(at).toISOString();
+    const table =
+      event === "issue_comment"
+        ? "github_webhook_read_model_comments_v1"
+        : "github_webhook_read_model_activity_v1";
+    const deliver = (id: string, action: string, receivedAt: number) =>
+      store.ingest(
+        requiredDelivery(event, id, new Date(receivedAt).toISOString(), {
+          action,
+          repository,
+          ...(event === "issue_comment"
+            ? { issue: issue(42, "parent", updatedAt) }
+            : { pull_request: pull(42, updatedAt) }),
+          comment: { id: 4201, body: "ClawSweeper status: review started.", updated_at: updatedAt },
+        }),
+        receivedAt,
+      );
+    deliver("created", "created", at);
+    storage.transactionSync(() => store.prunePayloadsSync(now));
+    deliver("deleted", "deleted", now);
+    const deleted = [...storage.sql.exec(`SELECT * FROM ${table}`)];
+    assert.equal(deleted[0].tombstone, 1);
+    assert.equal(JSON.parse(decodeStoredJson(String(deleted[0].snapshot_json))).body, null);
+    deliver("late-edit", "edited", now + 1);
+    assert.deepEqual([...storage.sql.exec(`SELECT * FROM ${table}`)], deleted);
+    storage.transactionSync(() =>
+      store.prunePayloadsSync(now + GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS + 1),
+    );
+    assert.equal(
+      [...storage.sql.exec("SELECT payload_pruned FROM github_webhook_read_model_items_v1")][0]
+        .payload_pruned,
+      1,
+    );
+  });
+}
 
 test("receipt expiry upgrades existing databases idempotently and uses a SQLite range search", (t) => {
   const { storage, store, now } = receiptExpiryFixture();
@@ -398,7 +493,7 @@ test("receipt expiry and watermark writes roll back together after a later prune
     if (query.startsWith(`DELETE FROM ${receiptTable} `)) pruned = result.rowsWritten;
     return result;
   });
-  storage.failNextSql(/DELETE FROM github_webhook_read_model_workflows_v1/);
+  storage.failNextSql(/SELECT rowid FROM github_webhook_read_model_workflows_v1/);
   assert.throws(() => store.ingest(receiptDelivery("retry", now), now), /injected SQL failure/);
   assert.equal(pruned, 256, "failure occurs after receipt pruning");
   assert.deepEqual(readModelState(storage), before);
@@ -475,6 +570,254 @@ function readModelState(storage: MemoryDurableStorage) {
   );
 }
 
+for (const repairKind of ["items", "comments", "placeholders"] as const) {
+  for (const itemKind of ["issue", "pull_request"] as const) {
+    test(`${repairKind} repair waits for its consumer's webhook class (${itemKind})`, async () => {
+      const storage = new MemoryDurableStorage();
+      const store = new GithubWebhookReadModelStore(storage);
+      store.ensureSchemaSync();
+      const now = Date.parse("2026-08-26T12:00:00Z");
+      const updatedAt = new Date(now).toISOString();
+      const item = {
+        kind: "item",
+        repository: repository.full_name,
+        number: 77,
+        itemKind,
+        sourceUpdatedAt: updatedAt,
+        snapshot: { ...issue(77, "polled item", updatedAt), comments: 1 },
+      };
+      const comment = commentObject(77, 7701, "ClawSweeper status: review started.", updatedAt);
+      const repair = {
+        repository: repository.full_name,
+        repair_kind: repairKind,
+        complete_comment_items: [77],
+        objects: repairKind === "items" ? [item] : [item, comment],
+      };
+      const requiredClass =
+        repairKind === "items"
+          ? itemKind === "issue"
+            ? "issues"
+            : "pull_requests"
+          : "issue_comments";
+      store.ingest(
+        {
+          version: 1,
+          deliveryId: "unrelated-class",
+          event: "workflow_run",
+          action: "completed",
+          receivedAt: updatedAt,
+          eventClasses: ["workflow_runs"],
+          objects: [],
+        },
+        now,
+      );
+      const before = readModelState(storage);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        assert.deepEqual(store.repair(repair, now + attempt), {
+          accepted: false,
+          reason: "event_class_unavailable",
+          watermark: 1,
+          evicted_workflow_runs: 0,
+        });
+        assert.deepEqual(readModelState(storage), before);
+      }
+      store.ingest(
+        {
+          version: 1,
+          deliveryId: "required-class",
+          event: requiredClass,
+          action: "created",
+          receivedAt: updatedAt,
+          eventClasses: [requiredClass],
+          objects: [],
+        },
+        now + 2,
+      );
+      assert.equal(store.repair(repair, now + 3).accepted, true);
+      assert.equal(store.classState(requiredClass, now + 3).available, true);
+      const response =
+        repairKind === "items"
+          ? await store.readItem({ repository: repository.full_name, number: 77 }, now + 4)
+          : repairKind === "comments"
+            ? await store.readComments({ repository: repository.full_name, number: 77 }, now + 4)
+            : await store.readPlaceholders(
+                { repository: repository.full_name, state: "open" },
+                now + 4,
+              );
+      assert.equal(response.usable, true);
+    });
+  }
+}
+
+test("mixed item repairs wait for every required class without partial writes", () => {
+  const storage = new MemoryDurableStorage();
+  const store = new GithubWebhookReadModelStore(storage);
+  store.ensureSchemaSync();
+  const now = Date.parse("2026-08-26T12:00:00Z");
+  const updatedAt = new Date(now).toISOString();
+  store.ingest(
+    requiredDelivery("issues", "issue-class", updatedAt, {
+      action: "opened",
+      repository,
+      issue: issue(77, "known issue", updatedAt),
+    }),
+    now,
+  );
+  const before = readModelState(storage);
+  assert.equal(
+    store.repair(
+      {
+        repository: repository.full_name,
+        repair_kind: "items",
+        objects: ["issue", "pull_request"].map((itemKind, index) => ({
+          kind: "item",
+          repository: repository.full_name,
+          number: 78 + index,
+          itemKind,
+          sourceUpdatedAt: updatedAt,
+          snapshot: issue(78 + index, "polled", updatedAt),
+        })),
+      },
+      now,
+    ).accepted,
+    false,
+  );
+  assert.deepEqual(readModelState(storage), before);
+});
+
+for (const kind of ["comment", "review"] as const) {
+  for (const count of [499, 500, 501, 620]) {
+    test(`${kind} pruning preserves retained IDs across the limit (${count})`, () => {
+      const storage = new MemoryDurableStorage();
+      const store = new GithubWebhookReadModelStore(storage);
+      store.ensureSchemaSync();
+      const table = `github_webhook_read_model_${kind === "comment" ? "comments" : "activity"}_v1`;
+      const idColumn = kind === "comment" ? "comment_id" : "activity_id";
+      const columns = `repository, number, ${kind === "review" ? "activity_kind," : ""}
+        ${idColumn}, source_updated_at, tombstone, snapshot_json, delivery_id, watermark, received_at, payload_retire_at`;
+      const now = Date.parse("2026-08-26T12:00:00Z");
+      store.ingest(
+        {
+          version: 1,
+          deliveryId: "comment-coverage",
+          event: "issue_comment",
+          action: "created",
+          receivedAt: new Date(now).toISOString(),
+          eventClasses: ["issue_comments"],
+          objects: [],
+        },
+        now,
+      );
+      storage.transactionSync(() => {
+        for (let id = 1; id <= count; id += 1) {
+          storage.sql.exec(
+            `INSERT INTO ${table} (${columns}) VALUES (?, 77, ${kind === "review" ? "'review'," : ""} ?, ?, ?, '{}', 'seed', 1, ?, ?)`,
+            repository.full_name,
+            id,
+            now - Math.floor((count - id) / 3),
+            id % 2,
+            now,
+            now + GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS,
+          );
+        }
+        if (kind === "review") {
+          // A retained ID also protects an older row of the other activity kind.
+          storage.sql.exec(
+            `INSERT INTO ${table} (${columns}) VALUES (?, 77, 'review_comment', ?, ?, 1, '{}', 'seed', 1, ?, ?)`,
+            repository.full_name,
+            count,
+            now - 10_000,
+            now,
+            now + GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS,
+          );
+        }
+        storage.sql.exec(
+          `INSERT INTO ${table} (${columns}) VALUES ('other/repo', 77, ${kind === "review" ? "'review'," : ""} 1, ?, 0, '{}', 'seed', 1, ?, ?)`,
+          now - 20_000,
+          now,
+          now + GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS,
+        );
+        storage.sql.exec(
+          `INSERT INTO ${table} (${columns}) VALUES (?, 78, ${kind === "review" ? "'review'," : ""} 1, ?, 0, '{}', 'seed', 1, ?, ?)`,
+          repository.full_name,
+          now - 20_000,
+          now,
+          now + GITHUB_WEBHOOK_READ_MODEL_PAYLOAD_RETENTION_MS,
+        );
+      });
+      const expected = [
+        ...storage.sql.exec(
+          `SELECT * FROM ${table}
+            WHERE repository <> ? OR number <> 77 OR ${idColumn} IN (
+              SELECT ${idColumn} FROM ${table} WHERE repository = ? AND number = 77
+               ORDER BY source_updated_at DESC, ${idColumn} DESC LIMIT 500
+            ) ORDER BY rowid`,
+          repository.full_name,
+          repository.full_name,
+        ),
+      ];
+      store.repair(
+        {
+          repository: repository.full_name,
+          repair_kind: "comments",
+          objects: [
+            {
+              kind,
+              repository: repository.full_name,
+              number: 77,
+              id: count,
+              sourceUpdatedAt: new Date(now - 30_000).toISOString(),
+              tombstone: false,
+              snapshot: {},
+            },
+          ],
+        },
+        now,
+      );
+      assert.deepEqual([...storage.sql.exec(`SELECT * FROM ${table} ORDER BY rowid`)], expected);
+    });
+  }
+}
+
+for (const count of [0, 1000, 1001, 1200]) {
+  for (const tied of [false, true]) {
+    test(`global workflow pruning preserves original order (${count}, tied=${tied})`, () => {
+      const storage = new MemoryDurableStorage();
+      const store = new GithubWebhookReadModelStore(storage);
+      store.ensureSchemaSync();
+      const table = "github_webhook_read_model_workflows_v1";
+      const now = Date.parse("2026-08-26T12:00:00Z");
+      storage.transactionSync(() => {
+        for (let id = 1; id <= count; id += 1) {
+          storage.sql.exec(
+            `INSERT INTO ${table} VALUES (?, ?, ?, NULL, ?, '{}', 'seed', 1, ?)`,
+            id % 2 ? repository.full_name : "other/repo",
+            id % 3 ? "workflow_run" : "check_run",
+            id,
+            tied ? now : now - (id % 17),
+            now,
+          );
+        }
+      });
+      const removed = new Set(
+        [
+          ...storage.sql.exec(
+            `SELECT rowid FROM ${table} ORDER BY source_updated_at DESC LIMIT -1 OFFSET 1000`,
+          ),
+        ].map((row) => row.rowid),
+      );
+      const expected = [...storage.sql.exec(`SELECT rowid, * FROM ${table} ORDER BY rowid`)].filter(
+        (row) => !removed.has(row.rowid),
+      );
+      store.ingest(receiptDelivery(`workflow-prune-${count}-${tied}`, now), now);
+      assert.deepEqual(
+        [...storage.sql.exec(`SELECT rowid, * FROM ${table} ORDER BY rowid`)],
+        expected,
+      );
+    });
+  }
+}
+
 test("comment-count gaps force a repair poll and a complete repair heals the collection", async () => {
   const storage = new MemoryDurableStorage();
   const store = new GithubWebhookReadModelStore(storage);
@@ -486,6 +829,7 @@ test("comment-count gaps force a repair poll and a complete repair heals the col
       repository,
       issue: { ...issue(55, "gap", updatedAt), comments: 2 },
     }),
+    Date.parse(updatedAt),
   );
   store.ingest(
     requiredDelivery("issue_comment", "gap-comment-one", updatedAt, {
@@ -494,6 +838,7 @@ test("comment-count gaps force a repair poll and a complete repair heals the col
       issue: { ...issue(55, "gap", updatedAt), comments: 2 },
       comment: { id: 5501, body: "one", created_at: updatedAt, updated_at: updatedAt },
     }),
+    Date.parse(updatedAt),
   );
   const gap = await store.readComments(
     { repository: "openclaw/openclaw", number: 55 },

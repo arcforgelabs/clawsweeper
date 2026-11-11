@@ -15,8 +15,8 @@ interface ReviewedFixture {
 export type ScanSourceRole = "base" | "head" | "index" | "tree" | "worktree";
 
 export type ReviewedAttribution = readonly [
-  detectorType: 17 | 895 | 899 | 938 | 968,
-  detectorName: "URI" | "MongoDB" | "FTP" | "Privacy" | "Postgres",
+  detectorType: 10 | 17 | 895 | 899 | 938 | 968,
+  detectorName: "JDBC" | "URI" | "MongoDB" | "FTP" | "Privacy" | "Postgres",
   decoder: "PLAIN" | "HTML" | "ESCAPED_UNICODE" | "BASE64",
   rawSha256: string,
   rawV2Sha256: string,
@@ -279,8 +279,59 @@ const OCE_KUBERNETES_COMPUTE_SOURCE_SHA256S = [
   "fa7f7f34b57faf013f53bbd8824cf9a2263c02a42a481282ae3d7d8be29184a2",
 ] as const;
 
+// OCE's password-free JDBC value tests an @ outside URL authority, not database access.
+const OCE_JDBC_ATTRIBUTION: ReviewedAttribution = [
+  10,
+  "JDBC",
+  "PLAIN",
+  "7f73c5b7c4cb379bbcc944971cff2c6a15ac0b0398b4c66ded6c8fb5db2c1833",
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "c5ad319a5dfbb0625c064799b1b534ffaf3ae6f42552bcff67bff122bc30e5b5",
+  "tests/integration/configuration-controller.test.mjs",
+  "100644",
+  [
+    "4fb0781a6e0e4663293fe38f5cb2a8919d934f071f1c6d0e4087550aa3583248",
+    "e635d55d005c55600ef11b138a739497728bb5fcdd314ca5f064be6e76c57010",
+    "210c27415aabb14a289aa94b6dab3ae2e872c33652e96a197496a2b0004eea0d",
+    "fbc5378e50acd82cec80c0841ac9d8486aaa5f8afed10a515d6a2a14a0ba6190",
+  ],
+];
+
+const OCE_SIGN_IN_SOURCE_SHA256S = [
+  "436f584bec32e8609ff5534ba172b90b4955b32fde3bb6a4a4117e7ce3979bee",
+  "3dc7c2044c566407e91e8983c040e2dfe9255484a18cce82de320042059e56fd",
+] as const;
+
 // oxfmt-ignore
 const REVIEWED_ATTRIBUTIONS: readonly ReviewedAttribution[] = [
+  OCE_JDBC_ATTRIBUTION,
+  // OCE harness-origin rejection fixture, pinned to exact historical source bytes.
+  // Native 3.99.4 reports PLAIN or BASE64 for the same literal witness.
+  [17, "URI", "PLAIN", "df5d0c0b6699181dcdecf0b5d53d60b7bc18ad36a9d306faa058306242584253", "df5d0c0b6699181dcdecf0b5d53d60b7bc18ad36a9d306faa058306242584253", "fc26cbb49456cf74b80e7ab0610563921cdbaabc557bc984bda8f281dbbd94d2", "tests/conformance/openshell-harness-status.test.mjs", "100644", ["9bd1ee333e9b86f5a47425e2d14f6dcbdba44868d05f5d06c21d9148fbc03ed8"]],
+  [17, "URI", "BASE64", "df5d0c0b6699181dcdecf0b5d53d60b7bc18ad36a9d306faa058306242584253", "df5d0c0b6699181dcdecf0b5d53d60b7bc18ad36a9d306faa058306242584253", "fc26cbb49456cf74b80e7ab0610563921cdbaabc557bc984bda8f281dbbd94d2", "tests/conformance/openshell-harness-status.test.mjs", "100644", ["9bd1ee333e9b86f5a47425e2d14f6dcbdba44868d05f5d06c21d9148fbc03ed8"]],
+  // OCE sign-in URL-rejection fixtures: qualify only observed blob/decoder pairs.
+  [17, "URI", "PLAIN", "80604187b394765a0db26f0ce735ae373dcd6e40f275a1f6492bccd3988fe925", "80604187b394765a0db26f0ce735ae373dcd6e40f275a1f6492bccd3988fe925", "d95cd614f4cb89a7bc1332e1b4006a1e2ff6e5019051ec1fcf749e09ee4721a2", "tests/integration/sign-in-chart-parity.test.mjs", "100644", OCE_SIGN_IN_SOURCE_SHA256S],
+  [17, "URI", "ESCAPED_UNICODE", "80604187b394765a0db26f0ce735ae373dcd6e40f275a1f6492bccd3988fe925", "80604187b394765a0db26f0ce735ae373dcd6e40f275a1f6492bccd3988fe925", "d95cd614f4cb89a7bc1332e1b4006a1e2ff6e5019051ec1fcf749e09ee4721a2", "tests/integration/sign-in-chart-parity.test.mjs", "100644", OCE_SIGN_IN_SOURCE_SHA256S],
+  [17, "URI", "PLAIN", "80867135981e495d05f129ebfdc5b945fe8f6d532000571afaf68371867b8b5b", "80867135981e495d05f129ebfdc5b945fe8f6d532000571afaf68371867b8b5b", "f97a96b01321eae8984b633d588d691dcd58c9687275e7e14e654fe5c2db0456", "tests/integration/sign-in-chart-parity.test.mjs", "100644", OCE_SIGN_IN_SOURCE_SHA256S],
+  [17, "URI", "ESCAPED_UNICODE", "80867135981e495d05f129ebfdc5b945fe8f6d532000571afaf68371867b8b5b", "80867135981e495d05f129ebfdc5b945fe8f6d532000571afaf68371867b8b5b", "f97a96b01321eae8984b633d588d691dcd58c9687275e7e14e654fe5c2db0456", "tests/integration/sign-in-chart-parity.test.mjs", "100644", OCE_SIGN_IN_SOURCE_SHA256S],
+  // Custom-endpoint rejection regression (OpenClaw 7775311d9860): reserved
+  // example host and fixed dummy userinfo. Native 3.99.4 emits either decoder
+  // for the identical full URI in source blobs and added/context patch lines.
+  [17, "URI", "PLAIN", "597eab0f9f33f6ee623768b183c5e349f6b5e94f4760d5e846c2e77fd193f977", "7efab902442b7a5718ca6037293710b1651a072ea24f11da9c6a9a5cadfb5fc3", "6532ea82ef6d753e323297804484e534857b597d5d82d161a1f14ab6ed606672", "src/gateway/server-methods/config-custom-endpoint.test.ts", "100644"],
+  [17, "URI", "HTML", "597eab0f9f33f6ee623768b183c5e349f6b5e94f4760d5e846c2e77fd193f977", "7efab902442b7a5718ca6037293710b1651a072ea24f11da9c6a9a5cadfb5fc3", "6532ea82ef6d753e323297804484e534857b597d5d82d161a1f14ab6ed606672", "src/gateway/server-methods/config-custom-endpoint.test.ts", "100644"],
+  // MCP Apps sandbox-origin negative fixture: retain the legacy PLAIN witness.
+  [17, "URI", "PLAIN", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "f7d672c72c5b3f9f67b09a5b0f15fdab1c565d36d534c62e3424c4cd1981bb06", "src/config/config-misc.test.ts", "100644"],
+  // Native 3.99.4 observed both source-blob decoders for the exact four-space source line.
+  [17, "URI", "PLAIN", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "6b3e1580cf762cafe2a8483dbfecf2aee6bd929725febab70331cfbf8d13a8b5", "src/config/config-misc.test.ts", "100644"],
+  [17, "URI", "HTML", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "6b3e1580cf762cafe2a8483dbfecf2aee6bd929725febab70331cfbf8d13a8b5", "src/config/config-misc.test.ts", "100644"],
+  // Observed in the complete committed-range native patch scan.
+  [17, "URI", "ESCAPED_UNICODE", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4", "6b3e1580cf762cafe2a8483dbfecf2aee6bd929725febab70331cfbf8d13a8b5", "src/config/config-misc.test.ts", "100644"],
+  // Existing synthetic loopback CDP endpoint in the mocked profile-status test.
+  [17, "URI", "PLAIN", "d15184614e748450d49a726f84955ca7745b87d0728afbd6bb6b50d84cce4fe0", "d15184614e748450d49a726f84955ca7745b87d0728afbd6bb6b50d84cce4fe0", ["246be528bbd0812126ba9e5aae3b9d61d60430c352cbd41d69c066c38fee4882", "9a313b5e628ff1390c50c9616bc95c8eb25c2c93050cafe481190930722103b9"], "extensions/browser/src/browser/server-context.existing-session.test.ts", "100644"],
+  [17, "URI", "HTML", "d15184614e748450d49a726f84955ca7745b87d0728afbd6bb6b50d84cce4fe0", "d15184614e748450d49a726f84955ca7745b87d0728afbd6bb6b50d84cce4fe0", ["246be528bbd0812126ba9e5aae3b9d61d60430c352cbd41d69c066c38fee4882", "9a313b5e628ff1390c50c9616bc95c8eb25c2c93050cafe481190930722103b9"], "extensions/browser/src/browser/server-context.existing-session.test.ts", "100644"],
+  // Synthetic endpoint-argument rejection fixture introduced by OpenClaw 3d7ef2108d94.
+  [17, "URI", "PLAIN", "5246f92cf855756f5fd7d561ea1b3679cd4957183af46ffb4a5d43968ba25254", "5246f92cf855756f5fd7d561ea1b3679cd4957183af46ffb4a5d43968ba25254", "6c2a04670bb977828ba872ddf7b3b119521afca0ef0846aeb4aea7b255476b45", "extensions/browser/src/browser/chrome-mcp.test.ts", "100644"],
+  [17, "URI", "HTML", "5246f92cf855756f5fd7d561ea1b3679cd4957183af46ffb4a5d43968ba25254", "5246f92cf855756f5fd7d561ea1b3679cd4957183af46ffb4a5d43968ba25254", "6c2a04670bb977828ba872ddf7b3b119521afca0ef0846aeb4aea7b255476b45", "extensions/browser/src/browser/chrome-mcp.test.ts", "100644"],
   // Ship #19: CLI-generated event_id; Privacy's keyword window crosses the reason field.
   // Bind the reviewed occurrence and complete blob, never arbitrary event IDs.
   [938, "Privacy", "PLAIN", "6e31751daf97832583d6877d6f79a17eb9b74188d3916d1668d136af36a9ea45", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "ed7bda1f092e8919442f3acb5c403917f2f0decbf3e7b50d1b7ce3d67bc0ddc7", ".grilltrack/events.jsonl", "100644", ["e9b2c64042139b1ed6400eac42b95796d10ad9782120cb88227c6f0655835d1c"]],
@@ -290,6 +341,8 @@ const REVIEWED_ATTRIBUTIONS: readonly ReviewedAttribution[] = [
   // OpenClaw catalog-icon rejection fixture: observed native prefixes bind the complete source line.
   [17, "URI", "PLAIN", "580f7a7c0ff4d88005bb0a7ad56ab18f84dc6ba38060fd35914e020e8b581a6a", "02fcb6434869afdf5b29773aad1295172012f6445975eba685b873c79e4567b9", "6c9cdafa1ff07a62a8ffc88c6b8d5d377becfb6fc09c3709d997dcc9ca890469", "src/plugins/catalog-icon-registry.test.ts", "100644"],
   [17, "URI", "HTML", "580f7a7c0ff4d88005bb0a7ad56ab18f84dc6ba38060fd35914e020e8b581a6a", "02fcb6434869afdf5b29773aad1295172012f6445975eba685b873c79e4567b9", "6c9cdafa1ff07a62a8ffc88c6b8d5d377becfb6fc09c3709d997dcc9ca890469", "src/plugins/catalog-icon-registry.test.ts", "100644"],
+  // Website password-only URL rejection fixture: native 3.99.4 observed PLAIN only.
+  [17, "URI", "PLAIN", "040dc8c3fadea20ff28b67c13648a45e001f231c496b404a17de54426060d03d", "040dc8c3fadea20ff28b67c13648a45e001f231c496b404a17de54426060d03d", "2ac91a04945f735283120e3d37c3879183f5e7343dab5f45e605f19ffb76b3c2", "ui/src/lib/board/widgets/website.test.ts", "100644"],
   // OpenClaw SDK CDP fixtures: observed native PLAIN identities and complete source lines.
   [17, "URI", "PLAIN", "87c268ea768beeb60885ffe0d9168e807d77c7f512aea8823703046c734cbdbf", "87c268ea768beeb60885ffe0d9168e807d77c7f512aea8823703046c734cbdbf", "808983a7a484c49a6b2a47f9696e4e86ecff5880d1fd2d76b081734e75a9e7fc", "src/plugin-sdk/browser-subpaths.test.ts", "100644"],
   [17, "URI", "PLAIN", "d85938093727ccf6959e1199023569dcfaa302bf5e86a28aa3ea9e011b7c1224", "069a918f1609e9f5c0f688d50e234f9b021eae193b573c2312355703eb2fa414", "e22c3375ec9e03b63845c873a0aa46c844ef5c3c9afa087d0b93d53e0fc4af64", "src/plugin-sdk/browser-subpaths.test.ts", "100644"],
@@ -333,12 +386,30 @@ const REVIEWED_ATTRIBUTIONS: readonly ReviewedAttribution[] = [
   // Approved browser CDP discovery fixture: https://github.com/openclaw/openclaw/pull/153597.
   [17, "URI", "HTML", "58e5399334d925e239b1b4777a226340f84778101809699897154e2a3c750a42", "a2b7cdba4afae496b99e64423837887e56340606268f28b7edef5a33e22cdc0f", "285d12ccfcf9b9547713f38140953dde8763b2ddccd234f8deed19b04c4b6f42", "extensions/browser/src/browser/pw-session.connections.test.ts", "100644"],
   [17, "URI", "PLAIN", "58e5399334d925e239b1b4777a226340f84778101809699897154e2a3c750a42", "a2b7cdba4afae496b99e64423837887e56340606268f28b7edef5a33e22cdc0f", "285d12ccfcf9b9547713f38140953dde8763b2ddccd234f8deed19b04c4b6f42", "extensions/browser/src/browser/pw-session.connections.test.ts", "100644"],
+  // Same browser CDP fixture after OpenClaw #160892 renamed its variable to `endpoint`.
+  [17, "URI", "HTML", "58e5399334d925e239b1b4777a226340f84778101809699897154e2a3c750a42", "a2b7cdba4afae496b99e64423837887e56340606268f28b7edef5a33e22cdc0f", "3237384b8bd243365230cef56f6af99fd77a330e0800069378256967e1bec6b6", "extensions/browser/src/browser/pw-session.connections.test.ts", "100644"],
+  [17, "URI", "PLAIN", "58e5399334d925e239b1b4777a226340f84778101809699897154e2a3c750a42", "a2b7cdba4afae496b99e64423837887e56340606268f28b7edef5a33e22cdc0f", "3237384b8bd243365230cef56f6af99fd77a330e0800069378256967e1bec6b6", "extensions/browser/src/browser/pw-session.connections.test.ts", "100644"],
   // Approved synthetic unsafe-link fixture: https://github.com/openclaw/openclaw/pull/153274.
   [17, "URI", "PLAIN", "148db1b794aa55e895c253fc95230148dd8cf58b8f97bac16c3db0147df7f457", "e10c3a5ca351377dab596260b30d87d26337a91bb3bb7b8f8d1fecda7285a125", "9b986f89b4bc448cd97566a1512992e765197fe5be1333cbb79681b1c25d95e4", "extensions/github/src/detail-checks.test.ts", "100644"],
   [17, "URI", "HTML", "148db1b794aa55e895c253fc95230148dd8cf58b8f97bac16c3db0147df7f457", "e10c3a5ca351377dab596260b30d87d26337a91bb3bb7b8f8d1fecda7285a125", "9b986f89b4bc448cd97566a1512992e765197fe5be1333cbb79681b1c25d95e4", "extensions/github/src/detail-checks.test.ts", "100644"],
+  // Same unsafe-link fixture after OpenClaw #164043 reformatted the it.each line.
+  [17, "URI", "PLAIN", "148db1b794aa55e895c253fc95230148dd8cf58b8f97bac16c3db0147df7f457", "e10c3a5ca351377dab596260b30d87d26337a91bb3bb7b8f8d1fecda7285a125", "381684e8963a0366eed1977f9405c1f4bbf370aae95af731970017e5013b6c76", "extensions/github/src/detail-checks.test.ts", "100644"],
+  [17, "URI", "HTML", "148db1b794aa55e895c253fc95230148dd8cf58b8f97bac16c3db0147df7f457", "e10c3a5ca351377dab596260b30d87d26337a91bb3bb7b8f8d1fecda7285a125", "381684e8963a0366eed1977f9405c1f4bbf370aae95af731970017e5013b6c76", "extensions/github/src/detail-checks.test.ts", "100644"],
+  // Existing OpenClaw github-detail credential fixtures that block reviews of pull
+  // requests touching detail.test.ts: https://github.com/openclaw/openclaw/pull/191210.
+  // The native PLAIN match stops at 45 bytes; the complete line witness still binds the full URL.
+  [17, "URI", "PLAIN", "902e57fd9767d172abc419455669b173ffe3b1d1e06b45dd190c86b8082a1b2e", "a9ff2e4d2ef22693a1505cfa8939988fed4a345e9c86a3df3a5a2cbd53cddf47", "0b30551ecf54f2d038daf933e1d509b4ae44348ecc0a5b6411e4f0ee13ec6de4", "extensions/github/src/detail.test.ts", "100644"],
+  [17, "URI", "PLAIN", "902e57fd9767d172abc419455669b173ffe3b1d1e06b45dd190c86b8082a1b2e", "237992038e2f8635133fc70c6372f4fd2cbb8a6d01433d243a3056670966ca43", "0b30551ecf54f2d038daf933e1d509b4ae44348ecc0a5b6411e4f0ee13ec6de4", "extensions/github/src/detail.test.ts", "100644"],
+  [17, "URI", "HTML", "902e57fd9767d172abc419455669b173ffe3b1d1e06b45dd190c86b8082a1b2e", "237992038e2f8635133fc70c6372f4fd2cbb8a6d01433d243a3056670966ca43", "0b30551ecf54f2d038daf933e1d509b4ae44348ecc0a5b6411e4f0ee13ec6de4", "extensions/github/src/detail.test.ts", "100644"],
+  [17, "URI", "HTML", "902e57fd9767d172abc419455669b173ffe3b1d1e06b45dd190c86b8082a1b2e", "a9ff2e4d2ef22693a1505cfa8939988fed4a345e9c86a3df3a5a2cbd53cddf47", "0b30551ecf54f2d038daf933e1d509b4ae44348ecc0a5b6411e4f0ee13ec6de4", "extensions/github/src/detail.test.ts", "100644"],
+  [17, "URI", "HTML", "1aa166a254353a56288ad1942fdac6d92342f9ca53ca6690247bae6cc0ac3738", "99c6ba8a9fbc40225ed3839f4cadf69924aa66ca191aa2bc647d0a18aaabe731", "2cb3fe66d84e6b0d6db6e488ea4990f951c6540131dd1f5f2627e983be773713", "extensions/github/src/detail.test.ts", "100644"],
+  [17, "URI", "PLAIN", "1aa166a254353a56288ad1942fdac6d92342f9ca53ca6690247bae6cc0ac3738", "99c6ba8a9fbc40225ed3839f4cadf69924aa66ca191aa2bc647d0a18aaabe731", "2cb3fe66d84e6b0d6db6e488ea4990f951c6540131dd1f5f2627e983be773713", "extensions/github/src/detail.test.ts", "100644"],
   // Maintainer-qualified Gateway readiness error privacy fixture from OpenClaw #152309.
   [17,"URI","PLAIN","630affa5ad9abd80845b370cfee593f079ea56cf2907e2e0135d154bb7d30fcb","630affa5ad9abd80845b370cfee593f079ea56cf2907e2e0135d154bb7d30fcb","135365663033f668caf9d6e3fc27b905e8ffaef8ad43bc587e43fceb055bad59","test/helpers/openclaw-test-instance.test.ts","100644"],
   [17,"URI","HTML","630affa5ad9abd80845b370cfee593f079ea56cf2907e2e0135d154bb7d30fcb","630affa5ad9abd80845b370cfee593f079ea56cf2907e2e0135d154bb7d30fcb","135365663033f668caf9d6e3fc27b905e8ffaef8ad43bc587e43fceb055bad59","test/helpers/openclaw-test-instance.test.ts","100644"],
+  // Maintainer-qualified update failure report redaction fixture from OpenClaw #190365.
+  [17, "URI", "PLAIN", "1b950d6c665b182a7aa7a553add23364cedb3ea08771873aea9547b3fd3dcb11", "a844b0f4456fddf3bf5e3d3e62391e29458c00c54fadd3ea087242f09889fae9", "81a1d346e39e01ea480079631e8bcd5ba2cc2f9b597a91f2c87036f4ac7f68a9", "src/infra/update-failure-report-config.test.ts", "100644"],
+  [17, "URI", "HTML", "1b950d6c665b182a7aa7a553add23364cedb3ea08771873aea9547b3fd3dcb11", "a844b0f4456fddf3bf5e3d3e62391e29458c00c54fadd3ea087242f09889fae9", "81a1d346e39e01ea480079631e8bcd5ba2cc2f9b597a91f2c87036f4ac7f68a9", "src/infra/update-failure-report-config.test.ts", "100644"],
   // Gateway sibling of the reviewed question URL-rejection fixture; exact source bytes differ.
   [17, "URI", "PLAIN", "2c45f25f2626ac90554ac699f6b285846faf497f796f3d1c05acb7fef231d0a9", "c914cd0ca5fb29af5f36f2e92ac43bf9fa59e1a729049dcbdd5b09cee50d4b28", "61b6dd9a49e1ba2bbbb38735e6227c34642f606603cf41999cd99be24a1fa011", "src/gateway/server-methods/question.test.ts", "100644"],
   [17, "URI", "HTML", "2c45f25f2626ac90554ac699f6b285846faf497f796f3d1c05acb7fef231d0a9", "c914cd0ca5fb29af5f36f2e92ac43bf9fa59e1a729049dcbdd5b09cee50d4b28", "61b6dd9a49e1ba2bbbb38735e6227c34642f606603cf41999cd99be24a1fa011", "src/gateway/server-methods/question.test.ts", "100644"],
@@ -449,11 +520,14 @@ const REVIEWED_ATTRIBUTIONS: readonly ReviewedAttribution[] = [
   [17, "URI", "HTML", "f6729932bd0216a9ced489911667e48ede49c4c0c9886343567e8abee5e4a2b6", "245d7408cf9309f13d71c800c1bea998316a44557319d3d9e25c27af5d1286b6", "a6f4875b345810baafb9140823570f1a2792cab59e1328393d86e2675d2f88f6", "src/worker/native-runtime-transport.test.ts", "100644"],
   [17, "URI", "PLAIN", "3ba4b9eb95fbafcb38a3dd4bc9886809ca70168cc4a8e552ed23d894cbb07df3", "3ba4b9eb95fbafcb38a3dd4bc9886809ca70168cc4a8e552ed23d894cbb07df3", "b832b4b17c9898d6604bb73c764f82f2eec8bb3e86e06791d70c1f55b4d8435e", "src/worker/native-runtime.test.ts", "100644"],
   [17, "URI", "HTML", "3ba4b9eb95fbafcb38a3dd4bc9886809ca70168cc4a8e552ed23d894cbb07df3", "3ba4b9eb95fbafcb38a3dd4bc9886809ca70168cc4a8e552ed23d894cbb07df3", "b832b4b17c9898d6604bb73c764f82f2eec8bb3e86e06791d70c1f55b4d8435e", "src/worker/native-runtime.test.ts", "100644"],
+  // OpenClaw #190911: native 3.99.4 PLAIN URI finding, exact rejection line and committed file.
+  [17, "URI", "PLAIN", "e26a1ab8bea9e595632020487f494a373085d4ece58f72dcb9c9d72aae3c1353", "91f8a02c4831296a6adc1d02eaf52ebaa563e1593b759677c284a23c4874e948", "d70f1b47aeda919b3c0c195b6e5df95fa6af2329760734508ab87bbbcbf456ef", "src/gateway/server-methods/projects-identity.test.ts", "100644", ["1441fca2a24daa08e02e82f032601729277b1334d3b996c2346d55ac6adabe90"]],
   ...CRABBOX_POSTGRES_DOC_ATTRIBUTIONS,
 ];
 
 const sha256Pattern = /^[0-9a-f]{64}$/;
 const detectorNames = {
+  10: "JDBC",
   17: "URI",
   895: "MongoDB",
   899: "FTP",
@@ -461,19 +535,59 @@ const detectorNames = {
   968: "Postgres",
 } as const;
 
+// An observed decoder variant is eligible only for this complete reviewed tuple.
+function isExactMcpSandboxEscapedAttribution(row: ReviewedAttribution): boolean {
+  const [detectorType, detectorName, decoder, raw, rawV2, line, source, mode] = row;
+  return (
+    row.length === 8 &&
+    detectorType === 17 &&
+    detectorName === "URI" &&
+    decoder === "ESCAPED_UNICODE" &&
+    raw === "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4" &&
+    rawV2 === "354e44c28981412829c4cd79588c7c5385d55221eb1f5d0014e96421d35e76a4" &&
+    line === "6b3e1580cf762cafe2a8483dbfecf2aee6bd929725febab70331cfbf8d13a8b5" &&
+    source === "src/config/config-misc.test.ts" &&
+    mode === "100644"
+  );
+}
+
+function isExactOceSignInAttribution(row: ReviewedAttribution): boolean {
+  const [type, name, decoder, raw, rawV2, line, source, mode, sourceSha256s] = row;
+  return (
+    row.length === 9 &&
+    type === 17 &&
+    name === "URI" &&
+    (decoder === "PLAIN" || decoder === "ESCAPED_UNICODE") &&
+    raw === rawV2 &&
+    ((raw === "80604187b394765a0db26f0ce735ae373dcd6e40f275a1f6492bccd3988fe925" &&
+      line === "d95cd614f4cb89a7bc1332e1b4006a1e2ff6e5019051ec1fcf749e09ee4721a2") ||
+      (raw === "80867135981e495d05f129ebfdc5b945fe8f6d532000571afaf68371867b8b5b" &&
+        line === "f97a96b01321eae8984b633d588d691dcd58c9687275e7e14e654fe5c2db0456")) &&
+    source === "tests/integration/sign-in-chart-parity.test.mjs" &&
+    mode === "100644" &&
+    Array.isArray(sourceSha256s) &&
+    sourceSha256s.length === OCE_SIGN_IN_SOURCE_SHA256S.length &&
+    sourceSha256s.every((digest, index) => digest === OCE_SIGN_IN_SOURCE_SHA256S[index])
+  );
+}
+
 function validateReviewedAttributions(rows: readonly ReviewedAttribution[]): void {
   const seen = new Set<string>();
   for (const row of rows) {
     const [detectorType, detectorName, decoder, raw, rawV2, line, source, mode, sourceSha256s] =
       row;
     const lines = typeof line === "string" ? [line] : line;
+    const exactJdbc = JSON.stringify(row) === JSON.stringify(OCE_JDBC_ATTRIBUTION);
     if (
+      (detectorType === 10 && !exactJdbc) ||
       row.length !== (sourceSha256s === undefined ? 8 : 9) ||
       detectorNames[detectorType] !== detectorName ||
       !Array.isArray(lines) ||
       !lines.length ||
       ![raw, rawV2, ...lines].every((digest) => sha256Pattern.test(digest)) ||
       !(
+        exactJdbc ||
+        isExactOceSignInAttribution(row) ||
         (source === ".grilltrack/events.jsonl" &&
           detectorType === 938 &&
           detectorName === "Privacy" &&
@@ -483,10 +597,26 @@ function validateReviewedAttributions(rows: readonly ReviewedAttribution[]): voi
           Array.isArray(sourceSha256s) &&
           sourceSha256s.length > 0 &&
           sourceSha256s.every((digest) => sha256Pattern.test(digest))) ||
-        (source === "src/plugin-sdk/browser-subpaths.test.ts" &&
+        (source === "src/gateway/server-methods/projects-identity.test.ts" &&
+          detectorType === 17 &&
+          detectorName === "URI" &&
+          decoder === "PLAIN" &&
+          lines.length === 1 &&
+          Array.isArray(sourceSha256s) &&
+          sourceSha256s.length === 1 &&
+          sourceSha256s.every((digest) => sha256Pattern.test(digest))) ||
+        ((source === "src/plugin-sdk/browser-subpaths.test.ts" ||
+          source === "ui/src/lib/board/widgets/website.test.ts") &&
           detectorType === 17 &&
           detectorName === "URI" &&
           decoder === "PLAIN") ||
+        (source === "tests/conformance/openshell-harness-status.test.mjs" &&
+          detectorType === 17 &&
+          detectorName === "URI" &&
+          (decoder === "PLAIN" || decoder === "BASE64") &&
+          Array.isArray(sourceSha256s) &&
+          sourceSha256s.length === 1 &&
+          sourceSha256s.every((digest) => sha256Pattern.test(digest))) ||
         (source === "tests/conformance/kubernetes-compute.test.mjs" &&
           detectorType === 17 &&
           detectorName === "URI" &&
@@ -512,6 +642,12 @@ function validateReviewedAttributions(rows: readonly ReviewedAttribution[]): voi
           detectorType === 17 &&
           detectorName === "URI" &&
           (decoder === "PLAIN" || decoder === "HTML")) ||
+        (source === "src/config/config-misc.test.ts" &&
+          detectorType === 17 &&
+          detectorName === "URI" &&
+          (decoder === "PLAIN" ||
+            decoder === "HTML" ||
+            isExactMcpSandboxEscapedAttribution(row))) ||
         (source === "extensions/matrix/src/matrix/client.test.ts" &&
           detectorType === 17 &&
           detectorName === "URI" &&
@@ -529,9 +665,12 @@ function validateReviewedAttributions(rows: readonly ReviewedAttribution[]): voi
           source === "src/secrets/model-egress.test.ts" ||
           source === "src/cli/proxy-cli.runtime.test.ts" ||
           source === "extensions/browser/src/browser/routes/basic.existing-session.test.ts" ||
+          source === "extensions/browser/src/browser/server-context.existing-session.test.ts" ||
           source === "extensions/typesafe/src/local.transport.test.ts" ||
           source === "extensions/browser/src/browser/config.test.ts" ||
+          source === "extensions/browser/src/browser/chrome-mcp.test.ts" ||
           source === "extensions/browser/src/browser/pw-session.connections.test.ts" ||
+          source === "extensions/github/src/detail.test.ts" ||
           source === "extensions/github/src/detail-checks.test.ts" ||
           source === "ui/src/pages/custodian/custodian-session-store.test.ts" ||
           source === "ui/src/e2e/plugins-help.e2e.test.ts" ||
@@ -539,6 +678,8 @@ function validateReviewedAttributions(rows: readonly ReviewedAttribution[]): voi
           source === "src/gateway/server-methods/question.test.ts" ||
           source === "src/gateway/server.config-patch.test.ts" ||
           source === "test/helpers/openclaw-test-instance.test.ts" ||
+          source === "src/infra/update-failure-report-config.test.ts" ||
+          source === "src/gateway/server-methods/config-custom-endpoint.test.ts" ||
           source === "skills/autoreview/tests/test_autoreview_hardening.py" ||
           source === ".agents/skills/autoreview/tests/test_autoreview_hardening.py") &&
           detectorType === 17 &&
@@ -1004,6 +1145,9 @@ function classifyReviewedFindings(
             source === "src/infra/git-source.test.ts" &&
             mode === "100644",
         );
+      const exactMcpSandboxEscapedAttribution =
+        finding.DecoderName === "ESCAPED_UNICODE" &&
+        exactCandidates.some(isExactMcpSandboxEscapedAttribution);
       const reviewedEventUuid =
         finding.DetectorType === 938 &&
         finding.DecoderName === "PLAIN" &&
@@ -1014,7 +1158,8 @@ function classifyReviewedFindings(
         !patchLiteral ||
         (finding.DecoderName !== "PLAIN" &&
           finding.DecoderName !== "HTML" &&
-          (finding.DecoderName !== "ESCAPED_UNICODE" || !exactGitSourceEscapedAttribution))
+          (finding.DecoderName !== "ESCAPED_UNICODE" ||
+            (!exactGitSourceEscapedAttribution && !exactMcpSandboxEscapedAttribution)))
       )
         return refuse("material_not_reviewed");
       // Decoder labels do not reconstruct source: this fixture still needs literal witnesses.
@@ -1126,7 +1271,16 @@ function classifyReviewedFindings(
         if (matchingMetadata.length === 0) return refuse("source_not_reviewed");
       }
       const parts = object(finding.SecretParts);
-      if (detectorType === 17) {
+      if (detectorType === 10) {
+        if (
+          rawV2 !== "" ||
+          !exactStringRecord(parts, ["connection_string"]) ||
+          parts?.connection_string !== raw ||
+          finding.ExtraData !== null ||
+          finding.VerificationError !== "missing host or password in connection string"
+        )
+          return refuse("metadata_mismatch");
+      } else if (detectorType === 17) {
         let uri: ReturnType<typeof nativeUriParts>;
         try {
           uri = nativeUriParts(rawV2);
@@ -1193,7 +1347,7 @@ function classifyReviewedFindings(
       const sourceLiteral =
         detectorType === 17
           ? rawV2
-          : detectorType === 899 || detectorType === 938
+          : detectorType === 10 || detectorType === 899 || detectorType === 938
             ? raw
             : undefined;
       while (lineStart <= text.length) {
@@ -1228,7 +1382,11 @@ function classifyReviewedFindings(
       const matchesWitness = (lines: readonly string[]) =>
         lines.length === witnessDigests.length &&
         lines.every((digest, index) => digest === witnessDigests[index]);
-      if (witnessLineNumber === undefined || !expectedDigests.some(matchesWitness))
+      if (
+        witnessLineNumber === undefined ||
+        !expectedDigests.some(matchesWitness) ||
+        (detectorType === 10 && scannerLine !== witnessLineNumber)
+      )
         return refuse("literal_mismatch");
       if (
         !staged.references.length ||

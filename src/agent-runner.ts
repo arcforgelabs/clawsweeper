@@ -3,16 +3,16 @@ import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { codexModelArgs, redactInternalCodexModel } from "./codex-env.js";
-import {
-  runCodexProcess,
-  type CodexAppServerProcessOptions,
-  type CodexProcessResult,
-} from "./codex-process.js";
+import { runCodexProcess, type CodexProcessResult } from "./codex-process.js";
 import { runOpenclawProcess } from "./openclaw-process.js";
 import { AgentInputScanError, scanAgentInput, type AgentScanSource } from "./agent-input-scan.js";
 import type { DecisionRepairOptions } from "./review-decision-repair.js";
 
 export type AgentRunner = "codex" | "openclaw";
+
+// The OpenClaw inspection pays a CLI cold start in a fresh state directory, a model
+// turn, and the trajectory export that proves the read; 30 s is too tight on small hosts.
+const OPENCLAW_CHECKOUT_INSPECTION_TIMEOUT_MS = 120_000;
 
 export interface RunAgentProcessOptions {
   label: string;
@@ -30,7 +30,6 @@ export interface RunAgentProcessOptions {
   outputLastMessageBytes?: number;
   stdoutPath?: string;
   stderrPath?: string;
-  appServer?: CodexAppServerProcessOptions;
   codexExtraArgs?: readonly string[];
   // Codex only: one repair turn on the same thread when the final decision fails validation.
   decisionRepair?: DecisionRepairOptions;
@@ -105,7 +104,7 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
     const args = codexAgentArgs(options);
     const managedOutput = options.outputLastMessageBytes !== undefined && outputPath !== undefined;
     return runCodexProcess({
-      args: managedOutput && !options.appServer ? managedCodexStdoutArgs(args) : args,
+      args: managedOutput ? managedCodexStdoutArgs(args) : args,
       cwd: options.cwd,
       env: options.env,
       input: options.prompt,
@@ -122,7 +121,6 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
         : {}),
       ...(options.stdoutPath ? { stdoutPath: options.stdoutPath } : {}),
       ...(options.stderrPath ? { stderrPath: options.stderrPath } : {}),
-      ...(options.appServer ? { appServer: options.appServer } : {}),
       ...(options.decisionRepair ? { decisionRepair: options.decisionRepair } : {}),
     });
   }
@@ -162,10 +160,7 @@ export function runAgentProcess(options: RunAgentProcessOptions): CodexProcessRe
         : { encoding: "utf8", flag: "wx", mode: 0o600 },
     );
   }
-  if (!options.appServer) return result;
-  const note =
-    "[clawsweeper] CLAWSWEEPER_STEERABLE_CODEX is Codex-specific; OpenClaw used a plain run.";
-  return { ...result, stderr: [result.stderr.trimEnd(), note].filter(Boolean).join("\n") };
+  return result;
 }
 
 export function runAgentCheckoutInspection(options: {
@@ -229,7 +224,7 @@ export function runAgentCheckoutInspection(options: {
       model: openclawModel(env),
       cwd: options.cwd,
       env,
-      timeoutMs: Math.min(remainingMs(), 30_000),
+      timeoutMs: Math.min(remainingMs(), OPENCLAW_CHECKOUT_INSPECTION_TIMEOUT_MS),
       checkoutInspection: { expectedText: challenge.text, expectedPath: challenge.path },
     });
   }

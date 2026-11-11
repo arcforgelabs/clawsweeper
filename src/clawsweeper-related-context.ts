@@ -1,3 +1,4 @@
+import { reviewBodyWithoutPreflight } from "./review-preflight-body.js";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -96,7 +97,12 @@ export function createRelatedContext({
     };
 
     const issue = asRecord(options.issue);
-    scanText(issue.body, "item body");
+    scanText(
+      options.item.kind === "pull_request" && typeof issue.body === "string"
+        ? reviewBodyWithoutPreflight(issue.body)
+        : issue.body,
+      "item body",
+    );
 
     options.comments.forEach((comment, index) => {
       scanText(asRecord(comment).body, `comment ${index + 1}`);
@@ -107,7 +113,11 @@ export function createRelatedContext({
     });
 
     if (options.pullRequest) {
-      scanText(asRecord(options.pullRequest).body, "pull request body");
+      const body = asRecord(options.pullRequest).body;
+      scanText(
+        typeof body === "string" ? reviewBodyWithoutPreflight(body) : body,
+        "pull request body",
+      );
     }
 
     options.timeline.forEach((event, index) => {
@@ -248,7 +258,7 @@ export function createRelatedContext({
       mergedAt: pullRequest.merged_at,
       body: redactCredentialUriUserinfo(
         truncateText(
-          typeof candidate.body === "string" ? candidate.body : "",
+          typeof candidate.body === "string" ? reviewBodyWithoutPreflight(candidate.body) : "",
           REFERENCING_PR_BODY_CHARS,
         ),
       ),
@@ -732,10 +742,14 @@ export function createRelatedContext({
         ),
       );
       if (!Array.isArray(response.items)) return null;
-      return response.items.map(asRecord).some((candidate) => {
+      const related = response.items.map(asRecord).some((candidate) => {
         const number = candidate.number;
         return typeof number === "number" && number !== item.number && !candidate.pull_request;
       });
+      // A search that timed out server-side can omit the match; only a
+      // complete result proves there is no related issue.
+      if (!related && response.incomplete_results === true) return null;
+      return related;
     } catch (error) {
       if (error instanceof GitHubRuntimeBudgetError) throw error;
       return null;

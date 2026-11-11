@@ -1,4 +1,6 @@
 import { sha256 } from "./content-hash.js";
+import { hiddenPayloadSecurityReview } from "./repair/security-signals.js";
+import { ghPaged } from "./clawsweeper-github-context.js";
 import {
   oversizedPullRequestLiveBlockReason,
   parseOversizedPullRequestEvidence,
@@ -12,8 +14,11 @@ import {
   EVENT_GUARDED_OPEN_ACTIONS,
   REVIEW_SECTIONS,
   isGitHubVerifiedFixedPullRequestSource,
+  requiresPrCloseCoverageProof,
+  requiresMaintainerProductClose,
 } from "./clawsweeper-policy.js";
 import type {
+  ApplyCloseGuardBlock,
   ActionTaken,
   ApplyKind,
   ApplyResult,
@@ -46,7 +51,7 @@ type ApplyCloseExecutionDependencies = Pick<
   | "applyAuthorPrBudgetStateToReport"
   | "resetGuardReadCache"
   | "withGuardReadOptions"
-  | "unconfirmedProductDirectionApplyBlockReasonSafe"
+  | "unconfirmedProductDirectionApplyBlockSafe"
   | "addIssueLabel"
   | "applyPrCloseCoverageProofReportSection"
   | "closeItem"
@@ -61,13 +66,13 @@ type ApplyCloseExecutionDependencies = Pick<
   | "GitHubRuntimeBudgetError"
   | "ghJson"
   | "implementedOnMainPullRequestProvenanceApplyBlock"
-  | "issueRecentHumanCommentBlockReasonSafe"
+  | "issueRecentHumanCommentBlockSafe"
   | "lowSignalUnmergeablePrApplyBlockReasonSafe"
   | "normalizeLabelName"
   | "removeCurrentCursorTraceItem"
   | "sleepMs"
   | "stalledUnprovenPrApplyBlockReasonSafe"
-  | "unsponsoredFeatureApplyBlockReasonSafe"
+  | "unsponsoredFeatureApplyBlockSafe"
   | "validateCloseDecision"
 >;
 
@@ -129,9 +134,9 @@ interface ApplyCloseExecutionOptions {
   closedDir: string;
   currentApplyMutationLeaseBlockReason: () => string | null;
   currentAuthorPrBudgetApplyGate: () => AuthorPrBudgetApplyGate;
-  currentObsoleteFixPrBlockReason: () => string | null;
+  currentObsoleteFixPrBlock: () => ApplyCloseGuardBlock | null;
   currentPrCloseCoverageProofGateBlock: () => PrCloseCoverageProofGateBlock | null;
-  currentStaleVersionBugBlockReason: () => string | null;
+  currentStaleVersionBugBlock: () => ApplyCloseGuardBlock | null;
   currentSameAuthorPairBlockReason: () => string | null;
   setCloseMutationPolicyGuard: (
     guard: (mutationNumber: number) => PrCloseCoverageProofGateBlock | null,
@@ -145,7 +150,12 @@ interface ApplyCloseExecutionOptions {
   item: Item;
   itemsDir: string;
   logProgress: (message: string) => void;
-  markApplySkipped: (action: ActionTaken, reason: string, liveGuardVerified?: boolean) => boolean;
+  markApplySkipped: (
+    action: ActionTaken,
+    reason: string,
+    liveGuardVerified?: boolean,
+    publicationProof?: Pick<ApplyResult, "closePolicyHoldVerified">,
+  ) => boolean;
   markChangedSinceReview: (block: ReviewFreshnessBlock) => boolean;
   minAgeDescription: string;
   minAgeMs: number;
@@ -220,9 +230,9 @@ export function executeApplyClose(
     closedDir,
     currentApplyMutationLeaseBlockReason,
     currentAuthorPrBudgetApplyGate,
-    currentObsoleteFixPrBlockReason,
+    currentObsoleteFixPrBlock,
     currentPrCloseCoverageProofGateBlock,
-    currentStaleVersionBugBlockReason,
+    currentStaleVersionBugBlock,
     currentSameAuthorPairBlockReason,
     setCloseMutationPolicyGuard,
     currentDurableReviewCommentUpdatedAt,
@@ -259,8 +269,13 @@ export function executeApplyClose(
     staleMinAgeDays,
     withPairedIssueMutationLease,
   } = options;
-  const skip = (action: ActionTaken, reason: string, liveGuardVerified = false): ApplyCloseFlow =>
-    markApplySkipped(action, reason, liveGuardVerified) ? "stop" : "next";
+  const skip = (
+    action: ActionTaken,
+    reason: string,
+    liveGuardVerified = false,
+    publicationProof: Pick<ApplyResult, "closePolicyHoldVerified"> = {},
+  ): ApplyCloseFlow =>
+    markApplySkipped(action, reason, liveGuardVerified, publicationProof) ? "stop" : "next";
   const recordSkip = (action: ActionTaken, reason: string): ApplyCloseFlow =>
     recordApplySkipped(action, reason) ? "stop" : "next";
   const skipLease = (reason: string): ApplyCloseFlow =>
@@ -328,14 +343,12 @@ export function executeApplyClose(
     }
   };
 
-  if (
-    requiredMaintainerDecision?.required &&
-    closeReason !== "unsponsored_feature_request" &&
-    closeReason !== "author_pr_budget_exceeded"
-  ) {
-    return skip(
+  // A recommendation and a repository-wide enable flag cannot answer an
+  // outstanding human choice. Product rejection is a maintainer-owned close.
+  if (requiredMaintainerDecision?.required || requiresMaintainerProductClose(closeReason)) {
+    return recordSkip(
       "kept_open",
-      `maintainer decision required: ${requiredMaintainerDecision.question}`,
+      `maintainer decision required: ${requiredMaintainerDecision?.question || "product-scope rejection needs an item-specific human decision"}`,
     );
   }
   if (closeLimitReached) {
@@ -406,7 +419,7 @@ export function executeApplyClose(
     closeReason,
     { requireCloseComment: !isRetryableSkippedClose },
   );
-  if (!currentReportValidation.ok && currentReportValidation.actionTaken !== "kept_open") {
+  if (!currentReportValidation.ok) {
     return skip(
       currentReportValidation.actionTaken,
       currentReportValidation.reason,
@@ -414,7 +427,7 @@ export function executeApplyClose(
     );
   }
   const duplicateCanonicalBlock = (): string | null =>
-    closeReason === "duplicate_or_superseded"
+    requiresPrCloseCoverageProof(closeReason)
       ? duplicateCanonicalPullRequestBlockReason(getMarkdown(), item, {
           reportDirs: [itemsDir, closedDir],
         })
@@ -429,8 +442,9 @@ export function executeApplyClose(
   });
   if (ageSkipReason) return recordSkip("kept_open", ageSkipReason);
 
-  const proofBlock =
-    closeReason === "duplicate_or_superseded" ? currentPrCloseCoverageProofGateBlock() : null;
+  const proofBlock = requiresPrCloseCoverageProof(closeReason)
+    ? currentPrCloseCoverageProofGateBlock()
+    : null;
   if (proofBlock) {
     if (proofBlock.actionTaken === "skipped_runtime_budget") {
       recordRuntimeBudgetYield(proofBlock.reason);
@@ -450,7 +464,7 @@ export function executeApplyClose(
   const closeoutActivityBaselineMs = Date.now();
   const freshnessBlock = postProofFreshnessBlock();
   if (freshnessBlock) return markChangedSinceReview(freshnessBlock) ? "stop" : "next";
-  if (closeReason === "duplicate_or_superseded") {
+  if (requiresPrCloseCoverageProof(closeReason)) {
     setMarkdown(applyPrCloseCoverageProofReportSection(getMarkdown(), proofResult()));
   }
 
@@ -458,33 +472,60 @@ export function executeApplyClose(
     const reason = lowSignalUnmergeablePrApplyBlockReasonSafe(number, staleMinAgeDays);
     if (reason) return skip("skipped_low_signal_live_guard", reason, true);
   }
-  const currentTerminalCloseBlock = (checkPair = true): PrCloseCoverageProofGateBlock | null => {
+  const currentTerminalCloseBlock = (
+    checkPair = true,
+    mutationNumber = number,
+  ): PrCloseCoverageProofGateBlock | null => {
+    const source = asRecord(ghJson(["api", `repos/${repo}/issues/${mutationNumber}`]));
+    const comments = fetchIssueReviewComments(mutationNumber);
+    if (source.pull_request)
+      comments.push(
+        ...ghPaged<Record<string, unknown>>(`repos/${repo}/pulls/${mutationNumber}/comments`),
+        ...ghPaged<Record<string, unknown>>(`repos/${repo}/pulls/${mutationNumber}/reviews`),
+      );
+    const security = hiddenPayloadSecurityReview(source.body, comments);
+    if (security) return { actionTaken: "kept_open", reason: security.summary };
     const policy = liveApplyCloseReasonPolicyBlock(dependencies, {
       closeReason,
       currentAuthorPrBudgetApplyGate,
-      currentObsoleteFixPrBlockReason,
-      currentStaleVersionBugBlockReason,
+      currentObsoleteFixPrBlock,
+      currentStaleVersionBugBlock,
       item,
       markdown: getMarkdown(),
       number,
       storedUpdatedAt: frontMatterValue(getMarkdown(), "item_updated_at"),
     });
-    if (policy) return { actionTaken: "kept_open", reason: policy.reason };
+    if (policy)
+      return {
+        actionTaken: "kept_open",
+        reason: policy.reason,
+        ...(policy.closePolicyHoldVerified
+          ? { closePolicyHoldVerified: policy.closePolicyHoldVerified }
+          : {}),
+      };
     if (closeReason === "low_signal_unmergeable_pr") {
       const reason = lowSignalUnmergeablePrApplyBlockReasonSafe(number, staleMinAgeDays);
       if (reason) return { actionTaken: "skipped_low_signal_live_guard", reason };
     }
     const pairReason = checkPair ? currentSameAuthorPairBlockReason() : null;
-    return pairReason ? { actionTaken: "skipped_same_author_pair", reason: pairReason } : null;
+    if (pairReason) return { actionTaken: "skipped_same_author_pair", reason: pairReason };
+    // Issues get no closeout comment, so a human lock after review is only visible here.
+    // Read last, after the policy reads, to keep the window before the close PATCH short.
+    const live = asRecord(ghJson(["api", `repos/${repo}/issues/${mutationNumber}`]));
+    return live.locked === true
+      ? { actionTaken: "skipped_locked_conversation", reason: "conversation is locked" }
+      : null;
   };
   // Paired implementation closes already have dedicated issue source/lease guards.
   // Recheck parent policy for both mutations; pair admission is needed for the parent.
   setCloseMutationPolicyGuard((mutationNumber) =>
-    currentTerminalCloseBlock(mutationNumber === number),
+    currentTerminalCloseBlock(mutationNumber === number, mutationNumber),
   );
   const initialTerminalBlock = currentTerminalCloseBlock();
   if (initialTerminalBlock)
-    return skip(initialTerminalBlock.actionTaken, initialTerminalBlock.reason);
+    return skip(initialTerminalBlock.actionTaken, initialTerminalBlock.reason, false, {
+      closePolicyHoldVerified: initialTerminalBlock.closePolicyHoldVerified === true,
+    });
 
   const closeMutationLeaseBlockReason = currentApplyMutationLeaseBlockReason();
   if (closeMutationLeaseBlockReason) return skipLease(closeMutationLeaseBlockReason);
@@ -633,7 +674,10 @@ export function executeApplyClose(
   if (preCloseMutationLeaseBlockReason) return skipLease(preCloseMutationLeaseBlockReason);
   ensureRuntimeDelayFits(closeDelayMs, "before close");
   const preNoteBlock = currentTerminalCloseBlock();
-  if (preNoteBlock) return skip(preNoteBlock.actionTaken, preNoteBlock.reason);
+  if (preNoteBlock)
+    return skip(preNoteBlock.actionTaken, preNoteBlock.reason, false, {
+      closePolicyHoldVerified: preNoteBlock.closePolicyHoldVerified === true,
+    });
   try {
     closeAppliedCommentReason =
       item.kind === "pull_request" && closeReason !== "oversized_pull_request"
@@ -709,7 +753,10 @@ export function executeApplyClose(
     }
   }
   const postNoteBlock = currentTerminalCloseBlock();
-  if (postNoteBlock) return skip(postNoteBlock.actionTaken, postNoteBlock.reason);
+  if (postNoteBlock)
+    return skip(postNoteBlock.actionTaken, postNoteBlock.reason, false, {
+      closePolicyHoldVerified: postNoteBlock.closePolicyHoldVerified === true,
+    });
   const finalCloseMutationLeaseBlockReason = currentApplyMutationLeaseBlockReason();
   if (finalCloseMutationLeaseBlockReason) return skipLease(finalCloseMutationLeaseBlockReason);
   const pairedIssuesReadyToClose: Array<{
